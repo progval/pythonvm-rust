@@ -1,11 +1,13 @@
 use std::fmt;
 use std::io;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum UnmarshalError {
     Io(io::Error),
     Decoding(::std::string::FromUtf8Error),
     UnexpectedCode(String),
+    InvalidReference,
 }
 
 impl fmt::Display for UnmarshalError {
@@ -14,6 +16,7 @@ impl fmt::Display for UnmarshalError {
             UnmarshalError::Io(ref e) => write!(f, "I/O error:").and_then(|_| e.fmt(f)),
             UnmarshalError::Decoding(ref e) => write!(f, "Decoding error:").and_then(|_| e.fmt(f)),
             UnmarshalError::UnexpectedCode(ref s) => write!(f, "{}", s),
+            UnmarshalError::InvalidReference => write!(f, "Invalid reference"),
         }
     }
 }
@@ -35,17 +38,16 @@ pub enum Object {
     String(::std::string::String),
     //Interned,
     //Ref_,
-    //Tuple,
+    Tuple(Vec<Arc<Object>>),
     //List,
     //Dict,
-    //Code,
+    Code(Arc<Object>),
     //Unknown,
     //Set,
     //FrozenSet,
     //Ref,
 
     Bytes(Vec<u8>), // aka. ASCII in CPython's marshal
-    //SmallTuple,
     //ShortAscii,
     //ShortAsciiInterned
 }
@@ -102,62 +104,108 @@ fn read_unicode_string<R: io::Read>(r: &mut R, size: usize) -> Result<String, Un
     }
 }
 
-pub fn read_object<R: io::Read>(r: &mut R) -> Result<Object, UnmarshalError> {
+fn read_tuple<R: io::Read>(r: &mut R, references: &mut Vec<Arc<Object>>, size: usize) -> Result<Vec<Arc<Object>>, UnmarshalError> {
+    let mut vector = Vec::<Arc<Object>>::new();
+    vector.reserve(size);
+    for _ in 0..size {
+        vector.push(try!(read_object(r, references)))
+    };
+    Ok(vector)
+}
+
+pub fn read_object<R: io::Read>(r: &mut R, references: &mut Vec<Arc<Object>>) -> Result<Arc<Object>, UnmarshalError> {
     let byte = read_byte!(r);
-    let _flag = byte & 0b10000000; // TODO: do something with this
+    let flag = byte & 0b10000000;
     let opcode = byte & 0b01111111;
-    let object = match opcode as char {
+    let (add_ref, object_arc) = match opcode as char {
         '0' => return Err(UnmarshalError::UnexpectedCode("NULL object in marshal data for object".to_string())),
-        'N' => Object::None,
-        'F' => Object::False,
-        'T' => Object::True,
-        'i' => Object::Int(try!(read_long(r))),
+        'N' => (false, Arc::new(Object::None)),
+        'F' => (false, Arc::new(Object::False)),
+        'T' => (false, Arc::new(Object::True)),
+        'i' => (true, Arc::new(Object::Int(try!(read_long(r))))),
         'z' | 'Z' => { // “short ascii”, “short ascii interned”
             let size = read_byte!(r) as usize;
-            Object::String(try!(read_ascii_string(r, size)))
+            (true, Arc::new(Object::String(try!(read_ascii_string(r, size)))))
         },
         'u' => { // “unicode”
             let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
-            Object::String(try!(read_unicode_string(r, size)))
+            (true, Arc::new(Object::String(try!(read_unicode_string(r, size)))))
         }
+        's' => { // “string”, but actually bytes
+            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
+            let mut buf = Vec::<u8>::new();
+            buf.resize(size, 0);
+            match r.read_exact(&mut buf) {
+                Err(err) => return Err(UnmarshalError::Io(err)),
+                Ok(()) => ()
+            };
+            (true, Arc::new(Object::Bytes(buf)))
+        },
+        ')' => { // “small tuple”
+            let size = read_byte!(r) as usize;
+            (true, Arc::new(Object::Tuple(try!(read_tuple(r, references, size)))))
+        },
+        '(' => { // “tuple”
+            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
+            (true, Arc::new(Object::Tuple(try!(read_tuple(r, references, size)))))
+        },
+        'r' => {
+            let index = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
+            (false, try!(references.get(index).ok_or(UnmarshalError::InvalidReference)).clone())
+        },
 
         _ => panic!(format!("Unsupported opcode: {}", opcode as char)),
     };
-    Ok(object)
+    if flag == 0 || !add_ref {
+        Ok(object_arc)
+    } else {
+        references.push(object_arc.clone());
+        Ok(object_arc)
+    }
+}
+
+macro_rules! assert_unmarshal {
+    ( $obj:expr, $bytecode:expr) => {{
+        let mut reader: &[u8] = $bytecode;
+        assert_eq!(Arc::new($obj), read_object(&mut reader, &mut Vec::new()).unwrap());
+    }}
 }
 
 #[test]
 fn test_basics() {
-    let mut reader: &[u8] = b"N";
-    assert_eq!(Object::None, read_object(&mut reader).unwrap());
+    assert_unmarshal!(Object::None, b"N");
 
-    let mut reader: &[u8] = b"T";
-    assert_eq!(Object::True, read_object(&mut reader).unwrap());
+    assert_unmarshal!(Object::True, b"T");
 
-    let mut reader: &[u8] = b"F";
-    assert_eq!(Object::False, read_object(&mut reader).unwrap());
+    assert_unmarshal!(Object::False, b"F");
 }
 
 #[test]
 fn test_int() {
-    let mut reader: &[u8] = b"\xe9\x00\x00\x00\x00";
-    assert_eq!(Object::Int(0), read_object(&mut reader).unwrap());
+    assert_unmarshal!(Object::Int(0), b"\xe9\x00\x00\x00\x00");
 
-    let mut reader: &[u8] = b"\xe9\x05\x00\x00\x00";
-    assert_eq!(Object::Int(5), read_object(&mut reader).unwrap());
+    assert_unmarshal!(Object::Int(5), b"\xe9\x05\x00\x00\x00");
 
-    let mut reader: &[u8] = b"\xe9\xe8\x03\x00\x00";
-    assert_eq!(Object::Int(1000), read_object(&mut reader).unwrap());
+    assert_unmarshal!(Object::Int(1000), b"\xe9\xe8\x03\x00\x00");
 }
 
 #[test]
 fn test_string() {
-    let mut reader: &[u8] = b"\xda\x03foo";
-    assert_eq!(Object::String("foo".to_string()), read_object(&mut reader).unwrap());
+    assert_unmarshal!(Object::String("foo".to_string()), b"\xda\x03foo");
 
-    let mut reader: &[u8] = b"\xda\x04foo\xe9"; // Note: this string was not generated with the marshal module
-    assert_eq!(Object::String("fooé".to_string()), read_object(&mut reader).unwrap());
+    // Note: this string was not generated with the marshal module
+    assert_unmarshal!(Object::String("fooé".to_string()), b"\xda\x04foo\xe9");
 
-    let mut reader: &[u8] = b"\xf5\x05\x00\x00\x00foo\xc3\xa9";
-    assert_eq!(Object::String("fooé".to_string()), read_object(&mut reader).unwrap());
+    assert_unmarshal!(Object::String("fooé".to_string()), b"\xf5\x05\x00\x00\x00foo\xc3\xa9");
+}
+
+#[test]
+fn test_bytes() {
+    assert_unmarshal!(Object::Bytes(vec!['f' as u8, 'o' as u8, 5]), b"\xf3\x03\x00\x00\x00fo\x05");
+}
+
+#[test]
+fn test_references() {
+    let item = Arc::new(Object::String("foo".to_string()));
+    assert_unmarshal!(Object::Tuple(vec![item.clone(), item.clone()]), b")\x02\xda\x03foor\x00\x00\x00\x00")
 }
