@@ -4,6 +4,7 @@ use std::io;
 #[derive(Debug)]
 pub enum UnmarshalError {
     Io(io::Error),
+    Decoding(::std::string::FromUtf8Error),
     UnexpectedCode(String),
 }
 
@@ -11,6 +12,7 @@ impl fmt::Display for UnmarshalError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             UnmarshalError::Io(ref e) => write!(f, "I/O error:").and_then(|_| e.fmt(f)),
+            UnmarshalError::Decoding(ref e) => write!(f, "Decoding error:").and_then(|_| e.fmt(f)),
             UnmarshalError::UnexpectedCode(ref s) => write!(f, "{}", s),
         }
     }
@@ -37,14 +39,12 @@ pub enum Object {
     //List,
     //Dict,
     //Code,
-    //Unicode,
     //Unknown,
     //Set,
     //FrozenSet,
     //Ref,
 
     Bytes(Vec<u8>), // aka. ASCII in CPython's marshal
-    //AsciiInterned,
     //SmallTuple,
     //ShortAscii,
     //ShortAsciiInterned
@@ -89,6 +89,19 @@ fn read_ascii_string<R: io::Read>(r: &mut R, size: usize) -> Result<String, Unma
     Ok(string)
 }
 
+fn read_unicode_string<R: io::Read>(r: &mut R, size: usize) -> Result<String, UnmarshalError> {
+    let mut buf = Vec::<u8>::new();
+    buf.resize(size, 0);
+    match r.read_exact(&mut buf) {
+        Err(err) => return Err(UnmarshalError::Io(err)),
+        Ok(()) => ()
+    };
+    match String::from_utf8(buf) {
+        Err(err) => return Err(UnmarshalError::Decoding(err)),
+        Ok(s) => Ok(s)
+    }
+}
+
 pub fn read_object<R: io::Read>(r: &mut R) -> Result<Object, UnmarshalError> {
     let byte = read_byte!(r);
     let _flag = byte & 0b10000000; // TODO: do something with this
@@ -103,6 +116,11 @@ pub fn read_object<R: io::Read>(r: &mut R) -> Result<Object, UnmarshalError> {
             let size = read_byte!(r) as usize;
             Object::String(try!(read_ascii_string(r, size)))
         },
+        'u' => { // “unicode”
+            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
+            Object::String(try!(read_unicode_string(r, size)))
+        }
+
         _ => panic!(format!("Unsupported opcode: {}", opcode as char)),
     };
     Ok(object)
@@ -138,5 +156,8 @@ fn test_string() {
     assert_eq!(Object::String("foo".to_string()), read_object(&mut reader).unwrap());
 
     let mut reader: &[u8] = b"\xda\x04foo\xe9"; // Note: this string was not generated with the marshal module
+    assert_eq!(Object::String("fooé".to_string()), read_object(&mut reader).unwrap());
+
+    let mut reader: &[u8] = b"\xf5\x05\x00\x00\x00foo\xc3\xa9";
     assert_eq!(Object::String("fooé".to_string()), read_object(&mut reader).unwrap());
 }
