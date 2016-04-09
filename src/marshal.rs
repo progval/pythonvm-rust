@@ -44,8 +44,8 @@ pub enum Object {
     //Dict,
     Code(Arc<Object>),
     //Unknown,
-    //Set,
-    //FrozenSet,
+    Set(Vec<Object>),
+    FrozenSet(Vec<Object>),
     Ref(u32),
 
     Bytes(Vec<u8>), // aka. ASCII in CPython's marshal
@@ -117,9 +117,26 @@ fn read_objects<R: io::Read>(r: &mut R, references: Vec<Object>, size: usize) ->
     Ok((vector, references2))
 }
 
+macro_rules! build_container {
+    ( $reader:expr, $references:expr, $container:expr, $size:expr, $flag:expr) => {{
+        let mut references = $references;
+        if $flag {
+            let index = references.len() as u32; // TODO: overflow check
+            references.push(Object::Hole);
+            let (objects, mut references) = try!(read_objects($reader, references, $size));
+            references[index as usize] = $container(objects); // TODO: overflow check
+            (false, Object::Ref(index), references)
+        }
+        else {
+            let (objects, mut references) = try!(read_objects($reader, references, $size));
+            (false, $container(objects), references)
+        }
+    }}
+}
+
 pub fn read_object<R: io::Read>(r: &mut R, mut references: Vec<Object>) -> Result<(Object, Vec<Object>), UnmarshalError> {
     let byte = read_byte!(r);
-    let flag = byte & 0b10000000;
+    let flag = if (byte & 0b10000000) == 0 { false } else { true };
     let opcode = byte & 0b01111111;
     let (add_ref, object, mut references) = match opcode as char {
         '0' => return Err(UnmarshalError::UnexpectedCode("NULL object in marshal data for object".to_string())),
@@ -147,21 +164,23 @@ pub fn read_object<R: io::Read>(r: &mut R, mut references: Vec<Object>) -> Resul
         },
         ')' => { // “small tuple”
             let size = read_byte!(r) as usize;
-            let (objects, references) = try!(read_objects(r, references, size));
-            (true, Object::Tuple(objects), references)
+            build_container!(r, references, Object::Tuple, size, flag)
         },
         '(' => { // “tuple”
             let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
-            let index = references.len() as u32; // TODO: overflow check
-            references.push(Object::Hole);
-            let (objects, mut references) = try!(read_objects(r, references, size));
-            references[index as usize] = Object::Tuple(objects); // TODO: overflow check
-            (false, Object::Ref(index), references)
+            build_container!(r, references, Object::Tuple, size, flag)
         },
         '[' => { // “list”
             let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
-            let (objects, references) = try!(read_objects(r, references, size));
-            (true, Object::List(objects), references)
+            build_container!(r, references, Object::List, size, flag)
+        }
+        '<' => { // “set”
+            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
+            build_container!(r, references, Object::Set, size, flag)
+        }
+        '>' => { // “frozenset”
+            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
+            build_container!(r, references, Object::FrozenSet, size, false)
         }
         'r' => {
             let index = try!(read_long(r));
@@ -170,12 +189,12 @@ pub fn read_object<R: io::Read>(r: &mut R, mut references: Vec<Object>) -> Resul
 
         _ => panic!(format!("Unsupported opcode: {}", opcode as char)),
     };
-    if flag == 0 || !add_ref {
-        Ok((object, references))
-    } else {
+    if flag && add_ref {
         let index = references.len() as u32; // TODO: overflow check
         references.push(object);
         Ok((Object::Ref(index), references))
+    } else {
+        Ok((object, references))
     }
 }
 
