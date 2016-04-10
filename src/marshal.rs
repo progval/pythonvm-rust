@@ -105,52 +105,49 @@ fn read_unicode_string<R: io::Read>(r: &mut R, size: usize) -> Result<String, Un
     }
 }
 
-fn read_objects<R: io::Read>(r: &mut R, references: Vec<Object>, size: usize) -> Result<(Vec<Object>, Vec<Object>), UnmarshalError> {
+fn read_objects<R: io::Read>(r: &mut R, references: &mut Vec<Object>, size: usize) -> Result<Vec<Object>, UnmarshalError> {
     let mut vector = Vec::<Object>::new();
-    let mut references2 = references;
     vector.reserve(size);
     for _ in 0..size {
-        let (object, r) = try!(read_object(r, references2));
-        references2 = r;
+        let object = try!(read_object(r, references));
         vector.push(object);
     };
-    Ok((vector, references2))
+    Ok(vector)
 }
 
 macro_rules! build_container {
-    ( $reader:expr, $references:expr, $container:expr, $size:expr, $flag:expr) => {{
-        let mut references = $references;
+    ( $reader:expr, $references:ident, $container:expr, $size:expr, $flag:expr) => {{
         if $flag {
-            let index = references.len() as u32; // TODO: overflow check
-            references.push(Object::Hole);
-            let (objects, mut references) = try!(read_objects($reader, references, $size));
-            references[index as usize] = $container(objects); // TODO: overflow check
-            (false, Object::Ref(index), references)
+            let index = $references.len() as u32; // TODO: overflow check
+            $references.push(Object::Hole);
+            let objects = try!(read_objects($reader, $references, $size));
+            $references[index as usize] = $container(objects); // TODO: overflow check
+            (false, Object::Ref(index))
         }
         else {
-            let (objects, mut references) = try!(read_objects($reader, references, $size));
-            (false, $container(objects), references)
+            let objects = try!(read_objects($reader, $references, $size));
+            (false, $container(objects))
         }
     }}
 }
 
-pub fn read_object<R: io::Read>(r: &mut R, mut references: Vec<Object>) -> Result<(Object, Vec<Object>), UnmarshalError> {
+pub fn read_object<R: io::Read>(r: &mut R, references: &mut Vec<Object>) -> Result<Object, UnmarshalError> {
     let byte = read_byte!(r);
     let flag = if (byte & 0b10000000) == 0 { false } else { true };
     let opcode = byte & 0b01111111;
-    let (add_ref, object, mut references) = match opcode as char {
+    let (add_ref, object) = match opcode as char {
         '0' => return Err(UnmarshalError::UnexpectedCode("NULL object in marshal data for object".to_string())),
-        'N' => (false, Object::None, references),
-        'F' => (false, Object::False, references),
-        'T' => (false, Object::True, references),
-        'i' => (true, Object::Int(try!(read_long(r))), references),
+        'N' => (false, Object::None),
+        'F' => (false, Object::False),
+        'T' => (false, Object::True),
+        'i' => (true, Object::Int(try!(read_long(r)))),
         'z' | 'Z' => { // “short ascii”, “short ascii interned”
             let size = read_byte!(r) as usize;
-            (true, Object::String(try!(read_ascii_string(r, size))), references)
+            (true, Object::String(try!(read_ascii_string(r, size))))
         },
         'u' => { // “unicode”
             let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
-            (true, Object::String(try!(read_unicode_string(r, size))), references)
+            (true, Object::String(try!(read_unicode_string(r, size))))
         }
         's' => { // “string”, but actually bytes
             let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
@@ -160,7 +157,7 @@ pub fn read_object<R: io::Read>(r: &mut R, mut references: Vec<Object>) -> Resul
                 Err(err) => return Err(UnmarshalError::Io(err)),
                 Ok(()) => ()
             };
-            (true, Object::Bytes(buf), references)
+            (true, Object::Bytes(buf))
         },
         ')' => { // “small tuple”
             let size = read_byte!(r) as usize;
@@ -184,7 +181,7 @@ pub fn read_object<R: io::Read>(r: &mut R, mut references: Vec<Object>) -> Resul
         }
         'r' => {
             let index = try!(read_long(r));
-            (false, Object::Ref(index), references)
+            (false, Object::Ref(index))
         },
 
         _ => panic!(format!("Unsupported opcode: {}", opcode as char)),
@@ -192,21 +189,23 @@ pub fn read_object<R: io::Read>(r: &mut R, mut references: Vec<Object>) -> Resul
     if flag && add_ref {
         let index = references.len() as u32; // TODO: overflow check
         references.push(object);
-        Ok((Object::Ref(index), references))
+        Ok(Object::Ref(index))
     } else {
-        Ok((object, references))
+        Ok(object)
     }
 }
 
 macro_rules! assert_unmarshal {
     ( $expected_obj:expr, $bytecode:expr) => {{
         let mut reader: &[u8] = $bytecode;
-        let (obj, _refs) = read_object(&mut reader, Vec::new()).unwrap();
+        let mut refs = Vec::new();
+        let obj = read_object(&mut reader, &mut refs).unwrap();
         assert_eq!($expected_obj, obj);
     }};
     ( $expected_obj:expr, $expected_refs:expr, $bytecode:expr) => {{
         let mut reader: &[u8] = $bytecode;
-        let (obj, refs) = read_object(&mut reader, Vec::new()).unwrap();
+        let mut refs = Vec::new();
+        let obj = read_object(&mut reader, &mut refs).unwrap();
         assert_eq!($expected_obj, obj);
         assert_eq!($expected_refs, refs);
     }};
