@@ -24,27 +24,29 @@ impl fmt::Display for UnmarshalError {
 
 
 macro_rules! read_byte {
-    ( $r:expr ) => {{
+    ( $reader:expr ) => {{
         let mut buf = [0];
-        match $r.read_exact(&mut buf) {
+        match $reader.read_exact(&mut buf) {
             Err(err) => return Err(UnmarshalError::Io(err)),
             Ok(()) => buf[0]
         }
     }};
 }
 
-fn read_long<R: io::Read>(r: &mut R) -> Result<u32, UnmarshalError> {
+/// Read a “marshal long”, ie. little-endian u32.
+fn read_long<R: io::Read>(reader: &mut R) -> Result<u32, UnmarshalError> {
     let mut buf = [0, 0, 0, 0];
-    match r.read_exact(&mut buf) {
+    match reader.read_exact(&mut buf) {
         Err(err) => return Err(UnmarshalError::Io(err)),
         Ok(()) => Ok(buf[0] as u32 + 256*(buf[1] as u32 + 256*(buf[2] as u32 + 256*(buf[3] as u32))))
     }
 }
 
-fn read_ascii_string<R: io::Read>(r: &mut R, size: usize) -> Result<String, UnmarshalError> {
+/// Read a string containing only ascii characters.
+fn read_ascii_string<R: io::Read>(reader: &mut R, size: usize) -> Result<String, UnmarshalError> {
     let mut buf = Vec::<u8>::new();
     buf.resize(size, 0);
-    match r.read_exact(&mut buf) {
+    match reader.read_exact(&mut buf) {
         Err(err) => return Err(UnmarshalError::Io(err)),
         Ok(()) => ()
     };
@@ -56,10 +58,11 @@ fn read_ascii_string<R: io::Read>(r: &mut R, size: usize) -> Result<String, Unma
     Ok(string)
 }
 
-fn read_unicode_string<R: io::Read>(r: &mut R, size: usize) -> Result<String, UnmarshalError> {
+/// Read a UTF8 string
+fn read_unicode_string<R: io::Read>(reader: &mut R, size: usize) -> Result<String, UnmarshalError> {
     let mut buf = Vec::<u8>::new();
     buf.resize(size, 0);
-    match r.read_exact(&mut buf) {
+    match reader.read_exact(&mut buf) {
         Err(err) => return Err(UnmarshalError::Io(err)),
         Ok(()) => ()
     };
@@ -69,16 +72,20 @@ fn read_unicode_string<R: io::Read>(r: &mut R, size: usize) -> Result<String, Un
     }
 }
 
-fn read_objects<R: io::Read>(r: &mut R, references: &mut Vec<Object>, size: usize) -> Result<Vec<Object>, UnmarshalError> {
+/// Read an arbitrary number of contiguous marshal objects
+fn read_objects<R: io::Read>(reader: &mut R, references: &mut Vec<Object>, size: usize) -> Result<Vec<Object>, UnmarshalError> {
     let mut vector = Vec::<Object>::new();
     vector.reserve(size);
     for _ in 0..size {
-        let object = try!(read_object(r, references));
+        let object = try!(read_object(reader, references));
         vector.push(object);
     };
     Ok(vector)
 }
 
+/// Read objects and build an other object containing them.
+/// If the flag is true, add this object to the vector of objects before reading its content
+/// (required, as the order of objects matter for references).
 macro_rules! build_container {
     ( $reader:expr, $references:ident, $container:expr, $size:expr, $flag:expr) => {{
         if $flag {
@@ -95,8 +102,11 @@ macro_rules! build_container {
     }}
 }
 
-pub fn read_object<R: io::Read>(r: &mut R, references: &mut Vec<Object>) -> Result<Object, UnmarshalError> {
-    let byte = read_byte!(r);
+/// Read an object, whose type is known from the first byte. If it is a container, read its content too.
+/// If the first bit is 1 and the marshal protocol allows the type to be referenced,
+/// add it to the list of references too.
+pub fn read_object<R: io::Read>(reader: &mut R, references: &mut Vec<Object>) -> Result<Object, UnmarshalError> {
+    let byte = read_byte!(reader);
     let flag = byte & 0b10000000 != 0;
     let opcode = byte & 0b01111111;
     let (add_ref, object) = match opcode as char {
@@ -104,66 +114,66 @@ pub fn read_object<R: io::Read>(r: &mut R, references: &mut Vec<Object>) -> Resu
         'N' => (false, Object::None),
         'F' => (false, Object::False),
         'T' => (false, Object::True),
-        'i' => (true, Object::Int(try!(read_long(r)))),
+        'i' => (true, Object::Int(try!(read_long(reader)))),
         'z' | 'Z' => { // “short ascii”, “short ascii interned”
-            let size = read_byte!(r) as usize;
-            (true, Object::String(try!(read_ascii_string(r, size))))
+            let size = read_byte!(reader) as usize;
+            (true, Object::String(try!(read_ascii_string(reader, size))))
         },
         'u' => { // “unicode”
-            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
-            (true, Object::String(try!(read_unicode_string(r, size))))
+            let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
+            (true, Object::String(try!(read_unicode_string(reader, size))))
         }
         's' => { // “string”, but actually bytes
-            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
+            let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
             let mut buf = Vec::<u8>::new();
             buf.resize(size, 0);
-            match r.read_exact(&mut buf) {
+            match reader.read_exact(&mut buf) {
                 Err(err) => return Err(UnmarshalError::Io(err)),
                 Ok(()) => ()
             };
             (true, Object::Bytes(buf))
         },
         ')' => { // “small tuple”
-            let size = read_byte!(r) as usize;
-            build_container!(r, references, Object::Tuple, size, flag)
+            let size = read_byte!(reader) as usize;
+            build_container!(reader, references, Object::Tuple, size, flag)
         },
         '(' => { // “tuple”
-            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
-            build_container!(r, references, Object::Tuple, size, flag)
+            let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
+            build_container!(reader, references, Object::Tuple, size, flag)
         },
         '[' => { // “list”
-            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
-            build_container!(r, references, Object::List, size, flag)
+            let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
+            build_container!(reader, references, Object::List, size, flag)
         }
         '<' => { // “set”
-            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
-            build_container!(r, references, Object::Set, size, flag)
+            let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
+            build_container!(reader, references, Object::Set, size, flag)
         }
         '>' => { // “frozenset”
-            let size = try!(read_long(r)) as usize; // TODO: overflow check if usize is smaller than u32
-            build_container!(r, references, Object::FrozenSet, size, false)
+            let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
+            build_container!(reader, references, Object::FrozenSet, size, false)
         }
         'r' => {
-            let index = try!(read_long(r));
+            let index = try!(read_long(reader));
             (false, Object::Ref(index))
         },
         'c' => { // “code”
             let code = Code {
-                argcount: try!(read_long(r)),
-                kwonlyargcount: try!(read_long(r)),
-                nlocals: try!(read_long(r)),
-                stacksize: try!(read_long(r)),
-                flags: try!(read_long(r)),
-                code: try!(read_object(r, references)),
-                consts: try!(read_object(r, references)),
-                names: try!(read_object(r, references)),
-                varnames: try!(read_object(r, references)),
-                freevars: try!(read_object(r, references)),
-                cellvars: try!(read_object(r, references)),
-                filename: try!(read_object(r, references)),
-                name: try!(read_object(r, references)),
-                firstlineno: try!(read_long(r)),
-                lnotab: try!(read_object(r, references)), // TODO: decode this
+                argcount: try!(read_long(reader)),
+                kwonlyargcount: try!(read_long(reader)),
+                nlocals: try!(read_long(reader)),
+                stacksize: try!(read_long(reader)),
+                flags: try!(read_long(reader)),
+                code: try!(read_object(reader, references)),
+                consts: try!(read_object(reader, references)),
+                names: try!(read_object(reader, references)),
+                varnames: try!(read_object(reader, references)),
+                freevars: try!(read_object(reader, references)),
+                cellvars: try!(read_object(reader, references)),
+                filename: try!(read_object(reader, references)),
+                name: try!(read_object(reader, references)),
+                firstlineno: try!(read_long(reader)),
+                lnotab: try!(read_object(reader, references)), // TODO: decode this
             };
 
             let object = Object::Code(Box::new(code));
