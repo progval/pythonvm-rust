@@ -23,6 +23,26 @@ impl fmt::Display for UnmarshalError {
 
 #[derive(PartialEq)]
 #[derive(Debug)]
+struct Code {
+    argcount: u32,
+    kwonlyargcount: u32,
+    nlocals: u32,
+    stacksize: u32,
+    flags: u32,
+    code: Object,
+    consts: Object,
+    names: Object,
+    varnames: Object,
+    freevars: Object,
+    cellvars: Object,
+    filename: Object,
+    name: Object,
+    firstlineno: u32,
+    lnotab: Object,
+}
+
+#[derive(PartialEq)]
+#[derive(Debug)]
 pub enum Object {
     Hole, // Temporary object for unmarshalling
     //Null,
@@ -42,7 +62,7 @@ pub enum Object {
     Tuple(Vec<Object>),
     List(Vec<Object>),
     //Dict,
-    Code(Arc<Object>),
+    Code(Box<Code>),
     //Unknown,
     Set(Vec<Object>),
     FrozenSet(Vec<Object>),
@@ -177,6 +197,28 @@ pub fn read_object<R: io::Read>(r: &mut R, references: &mut Vec<Object>) -> Resu
             let index = try!(read_long(r));
             (false, Object::Ref(index))
         },
+        'c' => { // “code”
+            let code = Code {
+                argcount: try!(read_long(r)),
+                kwonlyargcount: try!(read_long(r)),
+                nlocals: try!(read_long(r)),
+                stacksize: try!(read_long(r)),
+                flags: try!(read_long(r)),
+                code: try!(read_object(r, references)),
+                consts: try!(read_object(r, references)),
+                names: try!(read_object(r, references)),
+                varnames: try!(read_object(r, references)),
+                freevars: try!(read_object(r, references)),
+                cellvars: try!(read_object(r, references)),
+                filename: try!(read_object(r, references)),
+                name: try!(read_object(r, references)),
+                firstlineno: try!(read_long(r)),
+                lnotab: try!(read_object(r, references)), // TODO: decode this
+            };
+
+            let object = Object::Code(Box::new(code));
+            (true, object)
+        },
 
         _ => panic!(format!("Unsupported opcode: {}", opcode as char)),
     };
@@ -247,5 +289,33 @@ fn test_references() {
 fn test_recursive_reference() {
     // l = []; l.append(l)
     assert_unmarshal!(Object::Ref(0), vec![Object::List(vec![Object::Ref(0)])], b"\xdb\x01\x00\x00\x00r\x00\x00\x00\x00'");
+}
 
+#[test]
+fn test_code() {
+    // >>> def foo(bar):
+    // ...     return bar
+    // >>> print(',\n'.join('%s: %s' % (x[3:], getattr(foo.__code__, x)) for x in dir(foo.__code__) if x.startswith('co_')))
+
+    // >>> marshal.dumps(foo.__code__)
+    let code = Object::Code(Box::new(Code {
+        argcount: 1,
+        cellvars: Object::Ref(1),
+        code: Object::Bytes(vec![124, 0, 0, 83]),
+        consts: Object::Tuple(vec![Object::None]),
+        filename: Object::Ref(1),
+        firstlineno: 1,
+        flags: 67,
+        freevars: Object::Ref(1),
+        kwonlyargcount: 0,
+        lnotab: Object::Bytes(vec![0, 1]),
+        name: Object::Ref(2),
+        names: Object::Ref(0),
+        nlocals: 1,
+        stacksize: 1,
+        varnames: Object::Tuple(vec![Object::String("bar".to_string())])
+    }));
+    assert_unmarshal!(Object::Ref(3),
+        vec![Object::Tuple(vec![]), Object::String("<stdin>".to_string()), Object::String("foo".to_string()), code],
+        b"\xe3\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00C\x00\x00\x00s\x04\x00\x00\x00|\x00\x00S)\x01N\xa9\x00)\x01Z\x03barr\x01\x00\x00\x00r\x01\x00\x00\x00\xfa\x07<stdin>\xda\x03foo\x01\x00\x00\x00s\x02\x00\x00\x00\x00\x01");
 }
