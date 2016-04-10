@@ -19,6 +19,7 @@ pub struct Code {
     pub lnotab: Object,
 }
 
+/// Temporary object used only during the unmarshalling pass
 #[derive(PartialEq)]
 #[derive(Debug)]
 pub enum Object {

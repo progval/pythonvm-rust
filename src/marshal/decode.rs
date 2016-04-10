@@ -73,17 +73,17 @@ fn read_unicode_string<R: io::Read>(reader: &mut R, size: usize) -> Result<Strin
 }
 
 /// Read an arbitrary number of contiguous marshal objects
-fn read_objects<R: io::Read>(reader: &mut R, references: &mut Vec<Object>, size: usize) -> Result<Vec<Object>, UnmarshalError> {
+fn read_tmp_objects<R: io::Read>(reader: &mut R, references: &mut Vec<Object>, size: usize) -> Result<Vec<Object>, UnmarshalError> {
     let mut vector = Vec::<Object>::new();
     vector.reserve(size);
     for _ in 0..size {
-        let object = try!(read_object(reader, references));
+        let object = try!(read_tmp_object(reader, references));
         vector.push(object);
     };
     Ok(vector)
 }
 
-/// Read objects and build an other object containing them.
+/// Read temporary marshal objects and build an other object containing them.
 /// If the flag is true, add this object to the vector of objects before reading its content
 /// (required, as the order of objects matter for references).
 macro_rules! build_container {
@@ -91,21 +91,22 @@ macro_rules! build_container {
         if $flag {
             let index = $references.len() as u32; // TODO: overflow check
             $references.push(Object::Hole);
-            let objects = try!(read_objects($reader, $references, $size));
+            let objects = try!(read_tmp_objects($reader, $references, $size));
             $references[index as usize] = $container(objects); // TODO: overflow check
             (false, Object::Ref(index))
         }
         else {
-            let objects = try!(read_objects($reader, $references, $size));
+            let objects = try!(read_tmp_objects($reader, $references, $size));
             (false, $container(objects))
         }
     }}
 }
 
-/// Read an object, whose type is known from the first byte. If it is a container, read its content too.
+/// Read an tmporary marshal object, whose type is known from the first byte.
+/// If it is a container, read its content too.
 /// If the first bit is 1 and the marshal protocol allows the type to be referenced,
 /// add it to the list of references too.
-pub fn read_object<R: io::Read>(reader: &mut R, references: &mut Vec<Object>) -> Result<Object, UnmarshalError> {
+pub fn read_tmp_object<R: io::Read>(reader: &mut R, references: &mut Vec<Object>) -> Result<Object, UnmarshalError> {
     let byte = read_byte!(reader);
     let flag = byte & 0b10000000 != 0;
     let opcode = byte & 0b01111111;
@@ -164,16 +165,16 @@ pub fn read_object<R: io::Read>(reader: &mut R, references: &mut Vec<Object>) ->
                 nlocals: try!(read_long(reader)),
                 stacksize: try!(read_long(reader)),
                 flags: try!(read_long(reader)),
-                code: try!(read_object(reader, references)),
-                consts: try!(read_object(reader, references)),
-                names: try!(read_object(reader, references)),
-                varnames: try!(read_object(reader, references)),
-                freevars: try!(read_object(reader, references)),
-                cellvars: try!(read_object(reader, references)),
-                filename: try!(read_object(reader, references)),
-                name: try!(read_object(reader, references)),
+                code: try!(read_tmp_object(reader, references)),
+                consts: try!(read_tmp_object(reader, references)),
+                names: try!(read_tmp_object(reader, references)),
+                varnames: try!(read_tmp_object(reader, references)),
+                freevars: try!(read_tmp_object(reader, references)),
+                cellvars: try!(read_tmp_object(reader, references)),
+                filename: try!(read_tmp_object(reader, references)),
+                name: try!(read_tmp_object(reader, references)),
                 firstlineno: try!(read_long(reader)),
-                lnotab: try!(read_object(reader, references)), // TODO: decode this
+                lnotab: try!(read_tmp_object(reader, references)), // TODO: decode this
             };
 
             let object = Object::Code(Box::new(code));
@@ -195,13 +196,13 @@ macro_rules! assert_unmarshal {
     ( $expected_obj:expr, $bytecode:expr) => {{
         let mut reader: &[u8] = $bytecode;
         let mut refs = Vec::new();
-        let obj = read_object(&mut reader, &mut refs).unwrap();
+        let obj = read_tmp_object(&mut reader, &mut refs).unwrap();
         assert_eq!($expected_obj, obj);
     }};
     ( $expected_obj:expr, $expected_refs:expr, $bytecode:expr) => {{
         let mut reader: &[u8] = $bytecode;
         let mut refs = Vec::new();
-        let obj = read_object(&mut reader, &mut refs).unwrap();
+        let obj = read_tmp_object(&mut reader, &mut refs).unwrap();
         assert_eq!($expected_obj, obj);
         assert_eq!($expected_refs, refs);
     }};
