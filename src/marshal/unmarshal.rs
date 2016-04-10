@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
-use std::sync::Arc;
+
+use super::common::{Object, Code};
 
 #[derive(Debug)]
 pub enum UnmarshalError {
@@ -21,57 +22,6 @@ impl fmt::Display for UnmarshalError {
     }
 }
 
-#[derive(PartialEq)]
-#[derive(Debug)]
-struct Code {
-    argcount: u32,
-    kwonlyargcount: u32,
-    nlocals: u32,
-    stacksize: u32,
-    flags: u32,
-    code: Object,
-    consts: Object,
-    names: Object,
-    varnames: Object,
-    freevars: Object,
-    cellvars: Object,
-    filename: Object,
-    name: Object,
-    firstlineno: u32,
-    lnotab: Object,
-}
-
-#[derive(PartialEq)]
-#[derive(Debug)]
-pub enum Object {
-    Hole, // Temporary object for unmarshalling
-    //Null,
-    None,
-    False,
-    True,
-    //StopIter,
-    //Ellipsis,
-    Int(u32),
-    //Float,
-    //BinaryFloat,
-    //Complex,
-    //BinaryComplex,
-    String(::std::string::String),
-    //Interned,
-    //Ref_,
-    Tuple(Vec<Object>),
-    List(Vec<Object>),
-    //Dict,
-    Code(Box<Code>),
-    //Unknown,
-    Set(Vec<Object>),
-    FrozenSet(Vec<Object>),
-    Ref(u32),
-
-    Bytes(Vec<u8>), // aka. ASCII in CPython's marshal
-    //ShortAscii,
-    //ShortAsciiInterned
-}
 
 macro_rules! read_byte {
     ( $r:expr ) => {{
