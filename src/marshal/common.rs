@@ -46,7 +46,7 @@ pub enum Object {
     FrozenSet(Vec<Object>),
     Ref(u32),
 
-    Bytes(Vec<u8>), // aka. ASCII in CPython's marshal
+    Bytes(Vec<u8>),
     //ShortAscii,
     //ShortAsciiInterned
 }
