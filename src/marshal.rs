@@ -53,12 +53,6 @@ pub enum Object {
     //ShortAsciiInterned
 }
 
-pub enum Opcode {
-    // todo
-    ReturnValue,
-    LoadConst,
-}
-
 macro_rules! read_byte {
     ( $r:expr ) => {{
         let mut buf = [0];
