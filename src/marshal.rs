@@ -133,7 +133,7 @@ macro_rules! build_container {
 
 pub fn read_object<R: io::Read>(r: &mut R, references: &mut Vec<Object>) -> Result<Object, UnmarshalError> {
     let byte = read_byte!(r);
-    let flag = if (byte & 0b10000000) == 0 { false } else { true };
+    let flag = byte & 0b10000000 != 0;
     let opcode = byte & 0b01111111;
     let (add_ref, object) = match opcode as char {
         '0' => return Err(UnmarshalError::UnexpectedCode("NULL object in marshal data for object".to_string())),
