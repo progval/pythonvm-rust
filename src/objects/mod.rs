@@ -1,4 +1,6 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
 #[derive(Clone)]
@@ -41,29 +43,34 @@ pub struct Object {
 }
 
 #[derive(Debug)]
+#[derive(Hash)]
 #[derive(Clone)]
+#[derive(Eq)]
+#[derive(PartialEq)]
 pub struct ObjectRef {
-    index: usize,
+    id: usize,
 }
+
+static current_ref_id: AtomicUsize = ::std::sync::atomic::ATOMIC_USIZE_INIT;
 
 #[derive(Debug)]
 pub struct ObjectStore {
-    all_objects: Vec<Object>,
+    all_objects: HashMap<ObjectRef, Object>,
 }
 
 impl ObjectStore {
     pub fn new() -> ObjectStore {
-        ObjectStore { all_objects: Vec::new() }
+        ObjectStore { all_objects: HashMap::new() }
     }
 
     pub fn allocate(&mut self, obj: ObjectContent) -> ObjectRef {
-        let obj_ref = ObjectRef { index: self.all_objects.len() };
-        self.all_objects.push(Object { content: obj });
+        let obj_ref = ObjectRef { id: current_ref_id.fetch_add(1, Ordering::SeqCst) };
+        self.all_objects.insert(obj_ref.clone(), Object { content: obj });
         obj_ref
     }
 
     pub fn deref(&self, obj_ref: &ObjectRef) -> &Object {
         // TODO: check the reference is valid
-        self.all_objects.get(obj_ref.index).unwrap()
+        self.all_objects.get(obj_ref).unwrap()
     }
 }
