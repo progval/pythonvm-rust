@@ -1,6 +1,8 @@
 mod marshal;
 mod objects;
-//mod processor;
+mod processor;
+mod sandbox;
+mod stack;
 
 use std::fmt;
 use std::io;
@@ -26,7 +28,8 @@ pub fn run_module<R: io::Read>(reader: &mut R) -> Result<(), InterpreterError> {
     // TODO: do something with the content of the buffer
     let mut store = objects::ObjectStore::new();
     let module = try!(marshal::read_object(reader, &mut store).map_err(InterpreterError::Unmarshal));
-    //processor::run_code_object(module, &mut references);
+    let mut envproxy = sandbox::MockEnvProxy::new();
+    processor::run_code_object(&mut envproxy, module, &mut store);
     Ok(())
 }
 

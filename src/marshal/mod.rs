@@ -5,41 +5,68 @@ use std::io;
 use std::collections::HashSet;
 use super::objects::{Code, ObjectContent, Object, ObjectRef, ObjectStore};
 use self::common::Object as MarshalObject;
+use self::common::Code as MarshalCode;
 
 macro_rules! translate_vector {
     ( $e:expr, $map:ident, $store:ident ) => { $e.into_iter().map(|o| translate_object(o, $map, $store)).collect() }
 }
 
-fn translate_object(marshal_object: MarshalObject, translation_map: &Vec<ObjectRef>, store: &mut ObjectStore) -> ObjectRef {
+macro_rules! translate_code_field {
+    ( $code:ident, $expected:ident, $field:ident, $map:ident, $store:ident, $error:expr ) => {
+        match translate_object_content($code.$field, $map, $store) {
+            ObjectContent::$expected(v) => v,
+            _ => panic!($error),
+        }
+    };
+}
+
+// TODO: more fields
+fn translate_code(c: MarshalCode, translation_map: &Vec<ObjectRef>, store: &mut ObjectStore) -> Code {
+    let code = translate_code_field!(c, Bytes, code, translation_map, store, "Code.code object must be bytes.");
+    let consts = translate_code_field!(c, Tuple, consts, translation_map, store, "Code.consts object must be a tuple.");
+    let names = translate_code_field!(c, Tuple, names, translation_map, store, "Code.names object must be a tuple.");
+    Code { code: code, consts: consts, names: names }
+}
+
+fn translate_object_content(marshal_object: MarshalObject, translation_map: &Vec<ObjectRef>, store: &mut ObjectStore) -> ObjectContent {
     match marshal_object {
         MarshalObject::Hole => panic!("Remaining hole."),
-        MarshalObject::None => store.allocate(ObjectContent::None),
-        MarshalObject::False => store.allocate(ObjectContent::False),
-        MarshalObject::True => store.allocate(ObjectContent::True),
-        MarshalObject::Int(i) => store.allocate(ObjectContent::Int(i)),
-        MarshalObject::String(s) => store.allocate(ObjectContent::String(s)),
-        MarshalObject::Bytes(v) => store.allocate(ObjectContent::Bytes(v)),
+        MarshalObject::None => ObjectContent::None,
+        MarshalObject::False => ObjectContent::False,
+        MarshalObject::True => ObjectContent::True,
+        MarshalObject::Int(i) => ObjectContent::Int(i),
+        MarshalObject::String(s) => ObjectContent::String(s),
+        MarshalObject::Bytes(v) => ObjectContent::Bytes(v),
         MarshalObject::Tuple(v) => {
             let v = translate_vector!(v, translation_map, store);
-            store.allocate(ObjectContent::Tuple(v))
+            ObjectContent::Tuple(v)
         },
         MarshalObject::List(v) => {
             let v = translate_vector!(v, translation_map, store);
-            store.allocate(ObjectContent::List(v))
+            ObjectContent::List(v)
         },
         MarshalObject::Set(v) => {
             let v = translate_vector!(v, translation_map, store);
-            store.allocate(ObjectContent::Set(v))
+            ObjectContent::Set(v)
         },
         MarshalObject::FrozenSet(v) => {
             let v = translate_vector!(v, translation_map, store);
-            store.allocate(ObjectContent::FrozenSet(v))
+            ObjectContent::FrozenSet(v)
         },
         MarshalObject::Code(c) => {
-            let code = translate_object(c.code, translation_map, store);
-            store.allocate(ObjectContent::Code(Code { code: code})) // TODO: more fields
+            ObjectContent::Code(translate_code(*c, translation_map, store))
         },
+        MarshalObject::Ref(_) => panic!("For references, call translate_and_allocate_object.")
+    }
+}
+
+fn translate_object(marshal_object: MarshalObject, translation_map: &Vec<ObjectRef>, store: &mut ObjectStore) -> ObjectRef {
+    match marshal_object {
         MarshalObject::Ref(i) => translation_map.get(i as usize).unwrap().clone(), // TODO: overflow check
+        _ => {
+            let obj_content = translate_object_content(marshal_object, translation_map, store);
+            store.allocate(obj_content)
+        },
     }
 }
 

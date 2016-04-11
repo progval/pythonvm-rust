@@ -1,14 +1,16 @@
+use std::collections::HashSet;
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct Code {/*
     pub argcount: u32,
     pub kwonlyargcount: u32,
     pub nlocals: u32,
     pub stacksize: u32,
     pub flags: u32,*/
-    pub code: ObjectRef,/*
-    pub consts: Object,
-    pub names: Object,
+    pub code: Vec<u8>,
+    pub consts: Vec<ObjectRef>,
+    pub names: Vec<ObjectRef>,/*
     pub varnames: Object,
     pub freevars: Object,
     pub cellvars: Object,
@@ -35,7 +37,7 @@ pub enum ObjectContent {
 
 #[derive(Debug)]
 pub struct Object {
-    content: ObjectContent,
+    pub content: ObjectContent,
 }
 
 #[derive(Debug)]
@@ -58,5 +60,10 @@ impl ObjectStore {
         let obj_ref = ObjectRef { index: self.all_objects.len() };
         self.all_objects.push(Object { content: obj });
         obj_ref
+    }
+
+    pub fn deref(&self, obj_ref: &ObjectRef) -> &Object {
+        // TODO: check the reference is valid
+        self.all_objects.get(obj_ref.index).unwrap()
     }
 }
