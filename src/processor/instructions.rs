@@ -8,7 +8,7 @@ pub enum Instruction {
     LoadConst(usize),
     LoadName(usize),
     LoadFast(u16),
-    CallFunction(u16),
+    CallFunction(u8, u8),
 }
 
 #[derive(Debug)]
@@ -24,9 +24,8 @@ impl<I> InstructionDecoder<I> where I: Iterator {
 
 impl<'a, I> InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
     fn read_byte(&mut self) -> u8 {
-        match (self.bytestream.next(), self.bytestream.next()) {
-            (Some(b1), Some(b2)) => {
-                ((*b2 as u16) << 8) + (*b1 as u16)},
+        match self.bytestream.next() {
+            Some(b) => *b,
             _ => panic!("End of stream in the middle of an instruction."),
         }
     }
