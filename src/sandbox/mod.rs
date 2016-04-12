@@ -28,7 +28,7 @@ impl EnvProxy for RealEnvProxy {
 
 
 
-struct VectorWriter {
+pub struct VectorWriter {
     vector: Arc<Mutex<Vec<u8>>>,
 }
 
@@ -49,7 +49,7 @@ impl io::Write for VectorWriter {
 }
 
 pub struct MockEnvProxy {
-    stdout_content: Arc<Mutex<Vec<u8>>>,
+    pub stdout_content: Arc<Mutex<Vec<u8>>>,
 }
 
 impl MockEnvProxy {

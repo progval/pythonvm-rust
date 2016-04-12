@@ -8,7 +8,7 @@ pub enum Instruction {
     LoadConst(usize),
     LoadName(usize),
     LoadFast(u16),
-    CallFunction(u8, u8),
+    CallFunction(usize, usize), // nb_args, nb_kwargs
 }
 
 #[derive(Debug)]
@@ -49,7 +49,7 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
                 100 => Instruction::LoadConst(self.read_argument() as usize),
                 101 => Instruction::LoadName(self.read_argument() as usize),
                 124 => Instruction::LoadFast(self.read_argument()),
-                131 => Instruction::CallFunction(self.read_byte(), self.read_byte()),
+                131 => Instruction::CallFunction(self.read_byte() as usize, self.read_byte() as usize),
                 _ => panic!(format!("Opcode not supported: {}", opcode)),
             }
         })
