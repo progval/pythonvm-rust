@@ -4,11 +4,13 @@ use super::objects::{Object, Code, ObjectStore, ObjectRef, ObjectContent};
 use super::sandbox::EnvProxy;
 use super::stack::{Stack, VectorStack};
 use self::instructions::Instruction;
+use std::fmt;
 
+#[derive(Debug)]
 pub enum ProcessorError {
     CircularReference,
     InvalidReference,
-    NotACodeObject,
+    NotACodeObject(String),
     CodeObjectIsNotBytes,
     InvalidProgramCounter,
     StackTooSmall,
@@ -16,10 +18,16 @@ pub enum ProcessorError {
     InvalidNameIndex,
 }
 
+impl fmt::Display for ProcessorError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+       fmt::Debug::fmt(self, f)
+    }
+}
+
 fn call_function<EP: EnvProxy>(envproxy: &mut EP, store: &mut ObjectStore, func_ref: &ObjectRef, args: Vec<ObjectRef>, kwags: Vec<ObjectRef>) -> Result<ObjectRef, ProcessorError> {
     let code = match store.deref(func_ref).content {
         ObjectContent::Code(ref code) => code.clone(),
-        _ => return Err(ProcessorError::NotACodeObject),
+        ref o => return Err(ProcessorError::NotACodeObject(format!("{:?}", o))),
     };
     run_code(envproxy, store, code)
 }
@@ -54,7 +62,7 @@ fn run_code<EP: EnvProxy>(envproxy: &mut EP, store: &mut ObjectStore, code: Code
 pub fn run_code_object<EP: EnvProxy>(envproxy: &mut EP, store: &mut ObjectStore, module: ObjectRef) -> Result<ObjectRef, ProcessorError> {
     let code = match store.deref(&module).content {
         ObjectContent::Code(ref code) => code.clone(),
-        _ => return Err(ProcessorError::NotACodeObject),
+        ref o => return Err(ProcessorError::NotACodeObject(format!("{:?}", o))),
     };
     run_code(envproxy, store, code)
 }
