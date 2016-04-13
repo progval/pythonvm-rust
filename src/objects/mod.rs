@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 
 #[derive(Debug)]
 #[derive(Clone)]
@@ -52,7 +52,7 @@ pub struct ObjectRef {
     id: usize,
 }
 
-static current_ref_id: AtomicUsize = ::std::sync::atomic::ATOMIC_USIZE_INIT;
+static CURRENT_REF_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
 #[derive(Debug)]
 pub struct ObjectStore {
@@ -65,7 +65,7 @@ impl ObjectStore {
     }
 
     pub fn allocate(&mut self, obj: ObjectContent) -> ObjectRef {
-        let obj_ref = ObjectRef { id: current_ref_id.fetch_add(1, Ordering::SeqCst) };
+        let obj_ref = ObjectRef { id: CURRENT_REF_ID.fetch_add(1, Ordering::SeqCst) };
         self.all_objects.insert(obj_ref.clone(), Object { content: obj });
         obj_ref
     }

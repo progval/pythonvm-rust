@@ -10,12 +10,11 @@ pub trait EnvProxy {
 
 
 /// An EnvProxy that exposes the real environment
-pub struct RealEnvProxy {
-}
+pub struct RealEnvProxy;
 
 impl RealEnvProxy {
     pub fn new() -> RealEnvProxy {
-        RealEnvProxy { }
+        RealEnvProxy
     }
 }
 

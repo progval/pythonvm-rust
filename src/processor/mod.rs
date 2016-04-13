@@ -86,7 +86,7 @@ impl<EP: EnvProxy> Processor<EP> {
         let instructions: Vec<Instruction> = instructions::InstructionDecoder::new(bytecode.iter()).into_iter().collect();
         let mut program_counter = 0 as usize;
         let mut stack = VectorStack::new();
-        while true {
+        loop {
             let instruction = try!(instructions.get(program_counter).ok_or(ProcessorError::InvalidProgramCounter));
             program_counter += 1;
             match *instruction {
