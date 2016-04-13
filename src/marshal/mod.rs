@@ -2,8 +2,7 @@ pub mod common;
 pub mod decode;
 
 use std::io;
-use std::collections::HashSet;
-use super::objects::{Code, ObjectContent, Object, ObjectRef, ObjectStore};
+use super::objects::{Code, ObjectContent, ObjectRef, ObjectStore};
 use self::common::Object as MarshalObject;
 use self::common::Code as MarshalCode;
 

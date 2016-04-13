@@ -1,6 +1,6 @@
 pub mod instructions;
 
-use super::objects::{Object, Code, ObjectStore, ObjectRef, ObjectContent};
+use super::objects::{Code, ObjectStore, ObjectRef, ObjectContent};
 use super::sandbox::EnvProxy;
 use super::stack::{Stack, VectorStack};
 use self::instructions::Instruction;
@@ -29,7 +29,7 @@ fn run_code<EP: EnvProxy>(envproxy: &mut EP, store: &mut ObjectStore, code: Code
     let instructions: Vec<Instruction> = instructions::InstructionDecoder::new(bytecode.iter()).into_iter().collect();
     let mut program_counter = 0 as usize;
     let mut stack = VectorStack::new();
-    while true {
+    loop {
         let instruction = try!(instructions.get(program_counter).ok_or(ProcessorError::InvalidProgramCounter));
         program_counter += 1;
         match *instruction {

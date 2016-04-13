@@ -1,6 +1,4 @@
-use std::str::Bytes;
-
-#[derive(PartialEq)]
+    #[derive(PartialEq)]
 #[derive(Debug)]
 pub enum Instruction {
     PopTop,
