@@ -8,6 +8,8 @@ use std::fmt;
 use std::io;
 use processor::Processor;
 
+pub use sandbox::{RealEnvProxy, MockEnvProxy};
+
 #[derive(Debug)]
 pub enum InterpreterError {
     Io(io::Error),
