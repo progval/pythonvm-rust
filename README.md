@@ -1,5 +1,7 @@
 # pythonvm-rust
 
+[![Build Status](https://travis-ci.org/ProgVal/pythonvm-rust.svg?branch=master)](https://travis-ci.org/ProgVal/pythonvm-rust)
+
 A Python virtual machine, written in Rust.
 
 ## Features
