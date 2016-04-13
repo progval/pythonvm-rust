@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
@@ -12,7 +11,7 @@ pub struct Code {/*
     pub flags: u32,*/
     pub code: Vec<u8>,
     pub consts: Vec<ObjectRef>,
-    pub names: Vec<ObjectRef>,/*
+    pub names: Vec<String>,/*
     pub varnames: Object,
     pub freevars: Object,
     pub cellvars: Object,
@@ -23,6 +22,7 @@ pub struct Code {/*
 }
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub enum ObjectContent {
     None,
     True,
@@ -35,6 +35,7 @@ pub enum ObjectContent {
     Set(Vec<ObjectRef>),
     FrozenSet(Vec<ObjectRef>),
     Bytes(Vec<u8>),
+    BuiltinFunction(String),
 }
 
 #[derive(Debug)]

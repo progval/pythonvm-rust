@@ -1,5 +1,3 @@
-use std::str::Bytes;
-
 #[derive(PartialEq)]
 #[derive(Debug)]
 pub enum Instruction {

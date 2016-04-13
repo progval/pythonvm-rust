@@ -2,8 +2,7 @@ pub mod common;
 pub mod decode;
 
 use std::io;
-use std::collections::HashSet;
-use super::objects::{Code, ObjectContent, Object, ObjectRef, ObjectStore};
+use super::objects::{Code, ObjectContent, ObjectRef, ObjectStore};
 use self::common::Object as MarshalObject;
 use self::common::Code as MarshalCode;
 
@@ -24,7 +23,13 @@ macro_rules! translate_code_field {
 fn translate_code(c: MarshalCode, translation_map: &Vec<ObjectRef>, store: &mut ObjectStore) -> Code {
     let code = translate_code_field!(c, Bytes, code, translation_map, store, "Code.code object must be bytes.");
     let consts = translate_code_field!(c, Tuple, consts, translation_map, store, "Code.consts object must be a tuple.");
-    let names = translate_code_field!(c, Tuple, names, translation_map, store, "Code.names object must be a tuple.");
+    let name_objs = translate_code_field!(c, Tuple, names, translation_map, store, "Code.names object must be a tuple.");
+    let names = name_objs.iter().map(|obj| {
+        match store.deref(obj).content {
+            ObjectContent::String(ref name) => name.clone(),
+            _ => panic!("At least one object in Code.names is not a string."),
+        }
+    }).collect();
     Code { code: code, consts: consts, names: names }
 }
 
