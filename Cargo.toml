@@ -2,6 +2,7 @@
 name = "pythonvm"
 version = "0.1.0"
 authors = ["Valentin Lorentz <progval+git@progval.net>"]
+build = "build.rs"
 
 [lib]
 name = "pythonvm"

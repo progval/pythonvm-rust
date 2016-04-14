@@ -12,7 +12,7 @@ A Python virtual machine, written in Rust.
 
 ## Try it
 
-1. Install git, [Rust](https://www.rust-lang.org/downloads.html) and [Cargo](https://crates.io/install)
+1. Install Python 3.4 (used as a parser and bytecode compiler), git, [Rust](https://www.rust-lang.org/downloads.html) and [Cargo](https://crates.io/install)
 2. `git clone https://github.com/ProgVal/pythonvm-rust.git`
 3. `cd pythonvm-rust`
-4. `cargo run examples/helloworld.pyc`
+4. `cargo run pythonlib/ examples/helloworld.pyc`

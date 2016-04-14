@@ -1,4 +1,6 @@
-pub trait Stack {
+use std::fmt::Debug;
+
+pub trait Stack : Debug {
     type Item;
 
     fn top(&self) -> Option<&Self::Item>;
@@ -7,6 +9,7 @@ pub trait Stack {
     fn push(&mut self, value: Self::Item);
 }
 
+#[derive(Debug)]
 pub struct VectorStack<Item: Sized> {
     vector: Vec<Item>
 }
@@ -17,7 +20,7 @@ impl<Item> VectorStack<Item> {
     }
 }
 
-impl<Item> Stack for VectorStack<Item> {
+impl<Item> Stack for VectorStack<Item> where Item: Debug {
     type Item = Item;
 
     fn top(&self) -> Option<&Self::Item> {
