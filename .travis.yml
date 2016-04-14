@@ -3,6 +3,8 @@ rust:
   - stable
   - beta
   - nightly
+before_script:
+  - python3 -m compileall -b pythonlib examples
 matrix:
   allow_failures:
     - rust: nightly
