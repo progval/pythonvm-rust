@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::io::Write;
 use super::sandbox::EnvProxy;
-use super::processor::{Processor, ProcessorError, PyFunction};
-use super::objects::{Code, ObjectStore, ObjectRef, ObjectContent};
+use super::processor::{Processor, ProcessorError, PyResult, PyFunction};
+use super::objects::{ObjectRef, ObjectContent};
 
 macro_rules! parse_arguments {
     ( $funcname:expr, $store:expr, $args:ident, $( $argname:tt $argexpected:tt : { $($argpattern:pat => $argcode:block,)* } ),* ) => {{
@@ -24,7 +24,7 @@ macro_rules! parse_arguments {
     }};
 }
 
-fn write_stdout<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> Result<ObjectRef, ProcessorError> {
+fn write_stdout<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> Result<PyResult, ProcessorError> {
     parse_arguments!("print", processor.store, args,
         "value" "a string or an integer": {
             ObjectContent::String(ref s) => {
@@ -32,7 +32,7 @@ fn write_stdout<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef
             },
         }
     );
-    Ok(processor.store.allocate(ObjectContent::None))
+    Ok(PyResult::Return(processor.store.allocate(ObjectContent::None)))
 }
 
 

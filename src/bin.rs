@@ -29,5 +29,5 @@ pub fn main() {
     let mut path = PathBuf::new();
     path.push(&libdir);
     let env_proxy = pythonvm::RealEnvProxy::new(path);
-    let (_processor, _result) = pythonvm::run_module(&mut file, env_proxy).unwrap();
+    let (_processor, _result) = pythonvm::run_file(&mut file, env_proxy).unwrap();
 }

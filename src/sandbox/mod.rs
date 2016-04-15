@@ -1,12 +1,7 @@
 use std::io;
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::io::Bytes;
-use std::io::Read;
 use std::fs::File;
-
-use super::objects::{ObjectRef, ObjectStore};
 
 /// Real environment (I/O, signals, …) or a mock
 pub trait EnvProxy {

@@ -6,7 +6,6 @@ use super::stack::{Stack, VectorStack};
 use self::instructions::Instruction;
 use std::fmt;
 use std::collections::HashMap;
-use std::io::Write;
 use std::io::Read;
 use super::marshal;
 
@@ -23,7 +22,6 @@ pub enum ProcessorError {
     InvalidVarnameIndex,
     UnknownPrimitive(String),
     UnmarshalError(marshal::decode::UnmarshalError),
-    Exception(String),
 }
 
 impl fmt::Display for ProcessorError {
@@ -32,8 +30,13 @@ impl fmt::Display for ProcessorError {
     }
 }
 
+#[derive(Debug)]
+pub enum PyResult {
+    Return(ObjectRef),
+}
 
-pub type PyFunction<EP> = fn(&mut Processor<EP>, Vec<ObjectRef>) -> Result<ObjectRef, ProcessorError>;
+
+pub type PyFunction<EP> = fn(&mut Processor<EP>, Vec<ObjectRef>) -> Result<PyResult, ProcessorError>;
 
 pub struct Processor<EP: EnvProxy> {
     pub envproxy: EP,
@@ -43,6 +46,7 @@ pub struct Processor<EP: EnvProxy> {
 
 impl<EP: EnvProxy> Processor<EP> {
 
+    // Load a name from the namespace (only __primitive__ and locals for now)
     fn load_name(&mut self, namespace: &mut HashMap<String, ObjectRef>, name: String) -> Result<ObjectRef, ProcessorError> {
         if name == "__primitives__" {
             Ok(self.store.allocate(ObjectContent::PrimitiveNamespace))
@@ -51,11 +55,12 @@ impl<EP: EnvProxy> Processor<EP> {
             Ok(obj_ref.clone())
         }
         else {
-            panic!(format!("Cannot load {}: neither a primitive or in namespace.", name))
+            panic!(format!("Cannot load {}: neither __primitive__ or in namespace.", name))
         }
     }
 
-    fn call_function(&mut self, namespace: &mut HashMap<String, ObjectRef>, func_ref: &ObjectRef, args: Vec<ObjectRef>, kwargs: Vec<ObjectRef>) -> Result<ObjectRef, ProcessorError> {
+    // Call a primitive / function / code object, with arguments.
+    fn call_function(&mut self, namespace: &mut HashMap<String, ObjectRef>, func_ref: &ObjectRef, args: Vec<ObjectRef>, kwargs: Vec<ObjectRef>) -> Result<PyResult, ProcessorError> {
         // TODO: clone only if necessary
         match self.store.deref(func_ref).content.clone() {
             ObjectContent::Code(code) => {
@@ -82,11 +87,13 @@ impl<EP: EnvProxy> Processor<EP> {
         }
     }
 
-    fn run_code(&mut self, namespace: &mut HashMap<String, ObjectRef>, code: Code) -> Result<ObjectRef, ProcessorError> {
+    // Main interpreter loop
+    // See https://docs.python.org/3/library/dis.html for a description of instructions
+    fn run_code(&mut self, namespace: &mut HashMap<String, ObjectRef>, code: Code) -> Result<PyResult, ProcessorError> {
         let bytecode: Vec<u8> = code.code;
         let instructions: Vec<Instruction> = instructions::InstructionDecoder::new(bytecode.iter()).into_iter().collect();
         let mut program_counter = 0 as usize;
-        let mut stack = VectorStack::new();
+        let mut stack = VectorStack::<ObjectRef>::new();
         loop {
             let instruction = try!(instructions.get(program_counter).ok_or(ProcessorError::InvalidProgramCounter));
             program_counter += 1;
@@ -95,11 +102,11 @@ impl<EP: EnvProxy> Processor<EP> {
                     try!(stack.pop().ok_or(ProcessorError::StackTooSmall));
                     ()
                 },
-                Instruction::ReturnValue => return Ok(try!(stack.pop().ok_or(ProcessorError::StackTooSmall))),
+                Instruction::ReturnValue => return Ok(PyResult::Return(try!(stack.pop().ok_or(ProcessorError::StackTooSmall)))),
                 Instruction::StoreName(i) => {
                     let name = try!(code.names.get(i).ok_or(ProcessorError::InvalidNameIndex)).clone();
-                    let obj = try!(stack.pop().ok_or(ProcessorError::StackTooSmall));
-                    namespace.insert(name, obj);
+                    let obj_ref = try!(stack.pop().ok_or(ProcessorError::StackTooSmall));
+                    namespace.insert(name, obj_ref);
                 }
                 Instruction::LoadConst(i) => stack.push(try!(code.consts.get(i).ok_or(ProcessorError::InvalidConstIndex)).clone()),
                 Instruction::LoadName(i) | Instruction::LoadGlobal(i) => {
@@ -126,8 +133,10 @@ impl<EP: EnvProxy> Processor<EP> {
                     let kwargs = try!(stack.pop_many(nb_kwargs*2).ok_or(ProcessorError::StackTooSmall));
                     let args = try!(stack.pop_many(nb_args).ok_or(ProcessorError::StackTooSmall));
                     let func = try!(stack.pop().ok_or(ProcessorError::StackTooSmall));
-                    let ret_value = self.call_function(namespace, &func, args, kwargs);
-                    stack.push(try!(ret_value))
+                    let ret = try!(self.call_function(namespace, &func, args, kwargs));
+                    match ret {
+                        PyResult::Return(obj_ref) => stack.push(obj_ref),
+                    };
                 },
                 Instruction::MakeFunction(0, 0, 0) => {
                     // TODO: consume default arguments and annotations
@@ -143,24 +152,26 @@ impl<EP: EnvProxy> Processor<EP> {
         };
     }
 
-    pub fn run_module(&mut self, namespace: &mut HashMap<String, ObjectRef>, module_name: String) -> Result<(), ProcessorError> {
+    /// Load a module from its name and run it.
+    /// Functions and attributes will be added in the `namespace`.
+    pub fn run_module(&mut self, namespace: &mut HashMap<String, ObjectRef>, module_name: String) -> Result<PyResult, ProcessorError> {
         let mut builtins_bytecode = self.envproxy.open_module(module_name);
         let mut buf = [0; 12];
-        builtins_bytecode.read_exact(&mut buf);
+        builtins_bytecode.read_exact(&mut buf).unwrap();
         let builtins_code = try!(marshal::read_object(&mut builtins_bytecode, &mut self.store).map_err(ProcessorError::UnmarshalError));
         let builtins_code = match self.store.deref(&builtins_code).content {
             ObjectContent::Code(ref code) => code.clone(),
             ref o => return Err(ProcessorError::NotACodeObject(format!("{:?}", o))),
         };
-        try!(self.run_code(namespace, *builtins_code));
-        Ok(())
+        self.run_code(namespace, *builtins_code)
     }
 
-    pub fn run_code_object(&mut self, module: ObjectRef) -> Result<ObjectRef, ProcessorError> {
+    /// Entry point to run code. Loads builtins in the code's namespace and then run it.
+    pub fn run_code_object(&mut self, code_object: ObjectRef) -> Result<PyResult, ProcessorError> {
         let mut builtins = HashMap::new();
-        self.run_module(&mut builtins, "builtins".to_string());
+        try!(self.run_module(&mut builtins, "builtins".to_string()));
 
-        let code = match self.store.deref(&module).content {
+        let code = match self.store.deref(&code_object).content {
             ObjectContent::Code(ref code) => code.clone(),
             ref o => return Err(ProcessorError::NotACodeObject(format!("{:?}", o))),
         };

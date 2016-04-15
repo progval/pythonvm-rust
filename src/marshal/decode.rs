@@ -201,7 +201,6 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
             Ok(references.get(index as usize).unwrap().clone())
         },
         'c' => { // “code”
-            let index = references.len();
             let allocate_at = if flag {
                 let obj_ref = store.allocate(ObjectContent::Hole);
                 references.push(obj_ref.clone());
@@ -210,7 +209,7 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
             else {
                 None
             };
-            let argcount = try!(read_long(reader)) as usize;
+            let argcount = try!(read_long(reader));
             let kwonlyargcount = try!(read_long(reader));
             let nlocals = try!(read_long(reader));
             let stacksize = try!(read_long(reader));
@@ -226,7 +225,7 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
             let firstlineno = try!(read_long(reader));
             let lnotab = try!(read_object(reader, store, references)); // TODO: decode this
             let code = Code {
-                argcount: argcount,
+                argcount: argcount as usize,
                 kwonlyargcount: kwonlyargcount,
                 nlocals: nlocals,
                 stacksize: stacksize,
@@ -357,27 +356,6 @@ fn test_recursive_reference() {
 fn test_code() {
     // >>> def foo(bar):
     // ...     return bar
-    // >>> print(',\n'.join('%s: %s' % (x[3:], getattr(foo.__code__, x)) for x in dir(foo.__code__) if x.startswith('co_')))
-
-    // >>> marshal.dumps(foo.__code__)
-    /*
-    let code = ObjectContent::Code(Box::new(Code {
-        argcount: 1,
-        cellvars: ObjectContent::Ref(1),
-        code: ObjectContent::Bytes(vec![124, 0, 0, 83]),
-        consts: ObjectContent::Tuple(vec![ObjectContent::None]),
-        filename: ObjectContent::Ref(2),
-        firstlineno: 1,
-        flags: 67,
-        freevars: ObjectContent::Ref(1),
-        kwonlyargcount: 0,
-        lnotab: ObjectContent::Bytes(vec![0, 1]),
-        name: ObjectContent::Ref(3),
-        names: ObjectContent::Ref(1),
-        nlocals: 1,
-        stacksize: 1,
-        varnames: ObjectContent::Tuple(vec![ObjectContent::String("bar".to_string())])
-    }));*/
     let mut store = ObjectStore::new();
     let obj = get_obj!(store,
         b"\xe3\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00C\x00\x00\x00s\x04\x00\x00\x00|\x00\x00S)\x01N\xa9\x00)\x01Z\x03barr\x01\x00\x00\x00r\x01\x00\x00\x00\xfa\x07<stdin>\xda\x03foo\x01\x00\x00\x00s\x02\x00\x00\x00\x00\x01");
@@ -394,9 +372,8 @@ fn test_code() {
 }
 
 #[test]
-#[ignore]
 fn test_module() {
-    let mut bytes: &[u8] = b"\xe3\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00@\x00\x00\x00s\x10\x00\x00\x00d\x00\x00d\x01\x00\x84\x00\x00Z\x00\x00d\x02\x00S)\x03c\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00C\x00\x00\x00s\x1e\x00\x00\x00t\x00\x00j\x01\x00|\x00\x00\x83\x01\x00\x01t\x00\x00j\x01\x00d\x01\x00\x83\x01\x00\x01d\x00\x00S)\x02N\xda\x01\n)\x02Z\x0e__primitives__Z\x0cwrite_stdout)\x01\xda\x05value\xa9\x00r\x03\x00\x00\x00\xfa\x15pythonlib/builtins.py\xda\x05print\x01\x00\x00\x00s\x04\x00\x00\x00\x00\x01\r\x01r\x05\x00\x00\x00N)\x01r\x05\x00\x00\x00r\x03\x00\x00\x00r\x03\x00\x00\x00r\x03\x00\x00\x00r\x04\x00\x00\x00\xda\x08<module>\x01\x00\x00\x00s\x00\x00\x00\x00";
+    let bytes: &[u8] = b"\xe3\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00@\x00\x00\x00s\x10\x00\x00\x00d\x00\x00d\x01\x00\x84\x00\x00Z\x00\x00d\x02\x00S)\x03c\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00C\x00\x00\x00s\x1e\x00\x00\x00t\x00\x00j\x01\x00|\x00\x00\x83\x01\x00\x01t\x00\x00j\x01\x00d\x01\x00\x83\x01\x00\x01d\x00\x00S)\x02N\xda\x01\n)\x02Z\x0e__primitives__Z\x0cwrite_stdout)\x01\xda\x05value\xa9\x00r\x03\x00\x00\x00\xfa\x15pythonlib/builtins.py\xda\x05print\x01\x00\x00\x00s\x04\x00\x00\x00\x00\x01\r\x01r\x05\x00\x00\x00N)\x01r\x05\x00\x00\x00r\x03\x00\x00\x00r\x03\x00\x00\x00r\x03\x00\x00\x00r\x04\x00\x00\x00\xda\x08<module>\x01\x00\x00\x00s\x00\x00\x00\x00";
     let mut store = ObjectStore::new();
-    let obj = get_obj!(store, bytes);
+    get_obj!(store, bytes);
 }
