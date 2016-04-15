@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
+use std::fmt;
 
 #[derive(Debug)]
 #[derive(Clone)]
@@ -21,6 +22,12 @@ pub struct Code {
     pub name: String,
     pub firstlineno: u32,
     pub lnotab: ObjectRef,
+}
+
+impl Code {
+    pub fn co_varargs(&self) -> bool {
+        self.flags & 0x4 != 0
+    }
 }
 
 #[derive(Debug)]
@@ -61,9 +68,18 @@ pub struct ObjectRef {
 
 static CURRENT_REF_ID: AtomicUsize = ATOMIC_USIZE_INIT;
 
-#[derive(Debug)]
 pub struct ObjectStore {
     all_objects: HashMap<ObjectRef, Object>,
+}
+
+impl fmt::Debug for ObjectStore {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ObjectStore {{ all_objects: HashMap {{\n");
+        for (ref obj_ref, ref obj) in self.all_objects.iter() {
+            write!(f, "\t{} => {:?}\n", obj_ref.id, obj);
+        }
+        write!(f, "}}}}\n")
+    }
 }
 
 impl ObjectStore {
@@ -88,5 +104,9 @@ impl ObjectStore {
     pub fn deref(&self, obj_ref: &ObjectRef) -> &Object {
         // TODO: check the reference is valid
         self.all_objects.get(obj_ref).unwrap()
+    }
+    pub fn deref_mut(&mut self, obj_ref: &ObjectRef) -> &mut Object {
+        // TODO: check the reference is valid
+        self.all_objects.get_mut(obj_ref).unwrap()
     }
 }

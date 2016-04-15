@@ -38,6 +38,23 @@ pub enum PyResult {
 
 pub type PyFunction<EP> = fn(&mut Processor<EP>, Vec<ObjectRef>) -> Result<PyResult, ProcessorError>;
 
+#[derive(Debug)]
+struct Loop {
+    begin: usize,
+    end: usize,
+}
+
+struct Stacks {
+    var_stack: VectorStack<ObjectRef>,
+    loop_stack: VectorStack<Loop>,
+}
+
+macro_rules! pop_stack {
+    ( $stack_name:expr) => {
+        try!($stack_name.pop().ok_or(ProcessorError::StackTooSmall))
+    }
+}
+
 pub struct Processor<EP: EnvProxy> {
     pub envproxy: EP,
     pub store: ObjectStore,
@@ -60,12 +77,20 @@ impl<EP: EnvProxy> Processor<EP> {
     }
 
     // Call a primitive / function / code object, with arguments.
-    fn call_function(&mut self, namespace: &mut HashMap<String, ObjectRef>, func_ref: &ObjectRef, args: Vec<ObjectRef>, kwargs: Vec<ObjectRef>) -> Result<PyResult, ProcessorError> {
+    fn call_function(&mut self, namespace: &mut HashMap<String, ObjectRef>, func_ref: &ObjectRef, mut args: Vec<ObjectRef>, kwargs: Vec<ObjectRef>) -> Result<PyResult, ProcessorError> {
         // TODO: clone only if necessary
         match self.store.deref(func_ref).content.clone() {
             ObjectContent::Code(code) => {
                 let mut namespace = namespace.clone(); // TODO: costly, try maybe copy-on-write?
-                if code.argcount != args.len() {
+                if code.co_varargs() { // If it has a *args argument
+                    if code.argcount > args.len() {
+                        panic!(format!("Function {} expected at least {} arguments, but got {}.", code.name, code.argcount, args.len()))
+                    };
+                    let to_vararg = args.drain(code.argcount..).collect();
+                    let obj_ref = self.store.allocate(ObjectContent::Tuple(to_vararg));
+                    args.push(obj_ref);
+                }
+                else if code.argcount != args.len() {
                     panic!(format!("Function {} expected {} arguments, but got {}.", code.name, code.argcount, args.len()))
                 };
                 for (argname, argvalue) in code.varnames.iter().zip(args) {
@@ -83,7 +108,9 @@ impl<EP: EnvProxy> Processor<EP> {
                 };
                 function(self, args)
             },
-            ref o => return Err(ProcessorError::NotACodeObject(format!("{:?}", o))),
+            ref o => {
+                return Err(ProcessorError::NotACodeObject(format!("called {:?}", o)));
+            }
         }
     }
 
@@ -93,35 +120,53 @@ impl<EP: EnvProxy> Processor<EP> {
         let bytecode: Vec<u8> = code.code;
         let instructions: Vec<Instruction> = instructions::InstructionDecoder::new(bytecode.iter()).into_iter().collect();
         let mut program_counter = 0 as usize;
-        let mut stack = VectorStack::<ObjectRef>::new();
+        let mut stacks = Stacks { var_stack: VectorStack::new(), loop_stack: VectorStack::new() };
         loop {
             let instruction = try!(instructions.get(program_counter).ok_or(ProcessorError::InvalidProgramCounter));
             program_counter += 1;
             match *instruction {
                 Instruction::PopTop => {
-                    try!(stack.pop().ok_or(ProcessorError::StackTooSmall));
+                    pop_stack!(stacks.var_stack);
                     ()
                 },
-                Instruction::ReturnValue => return Ok(PyResult::Return(try!(stack.pop().ok_or(ProcessorError::StackTooSmall)))),
+                Instruction::BinarySubscr => {
+                    let index_ref = pop_stack!(stacks.var_stack);
+                    let index = self.store.deref(&index_ref).content.clone();
+                    let container_ref = pop_stack!(stacks.var_stack);
+                    let container = self.store.deref(&container_ref).content.clone();
+                    match (container, index) {
+                        (ObjectContent::Tuple(v), ObjectContent::Int(i)) | (ObjectContent::List(v), ObjectContent::Int(i)) => {
+                            match v.get(i as usize) { // TODO: overflow check
+                                None => panic!("Out of bound"),
+                                Some(obj_ref) => stacks.var_stack.push(obj_ref.clone()),
+                            }
+                        }
+                        _ => panic!("Indexing only supported for tuples/lists with an integer.")
+                    }
+                }
+                Instruction::ReturnValue => return Ok(PyResult::Return(pop_stack!(stacks.var_stack))),
                 Instruction::StoreName(i) => {
                     let name = try!(code.names.get(i).ok_or(ProcessorError::InvalidNameIndex)).clone();
-                    let obj_ref = try!(stack.pop().ok_or(ProcessorError::StackTooSmall));
+                    let obj_ref = pop_stack!(stacks.var_stack);
                     namespace.insert(name, obj_ref);
                 }
-                Instruction::LoadConst(i) => stack.push(try!(code.consts.get(i).ok_or(ProcessorError::InvalidConstIndex)).clone()),
+                Instruction::LoadConst(i) => stacks.var_stack.push(try!(code.consts.get(i).ok_or(ProcessorError::InvalidConstIndex)).clone()),
                 Instruction::LoadName(i) | Instruction::LoadGlobal(i) => {
                     let name = try!(code.names.get(i).ok_or(ProcessorError::InvalidNameIndex)).clone();
-                    stack.push(try!(self.load_name(namespace, name)))
+                    stacks.var_stack.push(try!(self.load_name(namespace, name)))
+                }
+                Instruction::SetupLoop(i) => {
+                    stacks.loop_stack.push(Loop { begin: program_counter, end: program_counter+i })
                 }
                 Instruction::LoadFast(i) => {
                     let name = try!(code.varnames.get(i).ok_or(ProcessorError::InvalidVarnameIndex)).clone();
-                    stack.push(try!(self.load_name(namespace, name)))
+                    stacks.var_stack.push(try!(self.load_name(namespace, name)))
                 }
                 Instruction::LoadAttr(i) => {
-                    let obj_ref = try!(stack.top().ok_or(ProcessorError::StackTooSmall)).clone();
+                    let obj_ref = try!(stacks.var_stack.top().ok_or(ProcessorError::StackTooSmall)).clone();
                     let name = try!(code.names.get(i).ok_or(ProcessorError::InvalidNameIndex)).clone();
                     if let ObjectContent::PrimitiveNamespace = self.store.deref(&obj_ref).content {
-                        stack.push(self.store.allocate(ObjectContent::PrimitiveFunction(name)))
+                        stacks.var_stack.push(self.store.allocate(ObjectContent::PrimitiveFunction(name)))
                     }
                     else {
                         unimplemented!();
@@ -130,22 +175,22 @@ impl<EP: EnvProxy> Processor<EP> {
                 Instruction::CallFunction(nb_args, nb_kwargs) => {
                     // See “Call constructs” at:
                     // http://security.coverity.com/blog/2014/Nov/understanding-python-bytecode.html
-                    let kwargs = try!(stack.pop_many(nb_kwargs*2).ok_or(ProcessorError::StackTooSmall));
-                    let args = try!(stack.pop_many(nb_args).ok_or(ProcessorError::StackTooSmall));
-                    let func = try!(stack.pop().ok_or(ProcessorError::StackTooSmall));
+                    let kwargs = try!(stacks.var_stack.pop_many(nb_kwargs*2).ok_or(ProcessorError::StackTooSmall));
+                    let args = try!(stacks.var_stack.pop_many(nb_args).ok_or(ProcessorError::StackTooSmall));
+                    let func = pop_stack!(stacks.var_stack);
                     let ret = try!(self.call_function(namespace, &func, args, kwargs));
                     match ret {
-                        PyResult::Return(obj_ref) => stack.push(obj_ref),
+                        PyResult::Return(obj_ref) => stacks.var_stack.push(obj_ref),
                     };
                 },
                 Instruction::MakeFunction(0, 0, 0) => {
                     // TODO: consume default arguments and annotations
-                    let func_name = match self.store.deref(&try!(stack.pop().ok_or(ProcessorError::StackTooSmall))).content {
+                    let func_name = match self.store.deref(&pop_stack!(stacks.var_stack)).content {
                         ObjectContent::String(ref s) => s.clone(),
                         _ => panic!("Function names must be strings."),
                     };
-                    let code = try!(stack.pop().ok_or(ProcessorError::StackTooSmall));
-                    stack.push(self.store.allocate(ObjectContent::Function(func_name, code)))
+                    let code = pop_stack!(stacks.var_stack);
+                    stacks.var_stack.push(self.store.allocate(ObjectContent::Function(func_name, code)))
                 },
                 _ => panic!(format!("todo: instruction {:?}", *instruction)),
             }
@@ -161,7 +206,7 @@ impl<EP: EnvProxy> Processor<EP> {
         let builtins_code = try!(marshal::read_object(&mut builtins_bytecode, &mut self.store).map_err(ProcessorError::UnmarshalError));
         let builtins_code = match self.store.deref(&builtins_code).content {
             ObjectContent::Code(ref code) => code.clone(),
-            ref o => return Err(ProcessorError::NotACodeObject(format!("{:?}", o))),
+            ref o => return Err(ProcessorError::NotACodeObject(format!("builtins code {:?}", o))),
         };
         self.run_code(namespace, *builtins_code)
     }
@@ -173,7 +218,7 @@ impl<EP: EnvProxy> Processor<EP> {
 
         let code = match self.store.deref(&code_object).content {
             ObjectContent::Code(ref code) => code.clone(),
-            ref o => return Err(ProcessorError::NotACodeObject(format!("{:?}", o))),
+            ref o => return Err(ProcessorError::NotACodeObject(format!("file code {:?}", o))),
         };
         self.run_code(&mut builtins, *code)
     }

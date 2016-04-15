@@ -2,11 +2,13 @@
 #[derive(Debug)]
 pub enum Instruction {
     PopTop,
+    BinarySubscr,
     ReturnValue,
     StoreName(usize),
     LoadConst(usize),
     LoadName(usize),
     LoadAttr(usize),
+    SetupLoop(usize),
     LoadFast(usize),
     LoadGlobal(usize),
     CallFunction(usize, usize), // nb_args, nb_kwargs
@@ -47,12 +49,14 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
         self.bytestream.next().map(|opcode| {
             match *opcode {
                 1 => Instruction::PopTop,
+                25 => Instruction::BinarySubscr,
                 83 => Instruction::ReturnValue,
                 90 => Instruction::StoreName(self.read_argument() as usize),
                 100 => Instruction::LoadConst(self.read_argument() as usize),
                 101 => Instruction::LoadName(self.read_argument() as usize),
                 106 => Instruction::LoadAttr(self.read_argument() as usize),
                 116 => Instruction::LoadGlobal(self.read_argument() as usize),
+                120 => Instruction::SetupLoop(self.read_argument() as usize),
                 124 => Instruction::LoadFast(self.read_argument() as usize),
                 131 => Instruction::CallFunction(self.read_byte() as usize, self.read_byte() as usize),
                 132 => {
