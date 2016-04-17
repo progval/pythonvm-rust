@@ -33,6 +33,7 @@ impl fmt::Display for ProcessorError {
 #[derive(Debug)]
 pub enum PyResult {
     Return(ObjectRef),
+    Raise(ObjectRef),
 }
 
 
@@ -202,6 +203,7 @@ impl<EP: EnvProxy> Processor<EP> {
                     let ret = try!(self.call_function(namespace, &func, args, kwargs));
                     match ret {
                         PyResult::Return(obj_ref) => stacks.var_stack.push(obj_ref),
+                        PyResult::Raise(obj_ref) => return Ok(PyResult::Raise(obj_ref))
                     };
                 },
                 Instruction::MakeFunction(0, 0, 0) => {
