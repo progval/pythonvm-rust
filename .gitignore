@@ -3,4 +3,5 @@ Cargo.lock
 *.swp
 *~
 *.iml
-pythonlib/*.pyc
+*.pyc
+

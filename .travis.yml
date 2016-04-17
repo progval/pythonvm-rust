@@ -11,6 +11,9 @@ addons:
     - python3.4
 before_script:
   - python3 -m compileall -b pythonlib examples
+script:
+  - cargo test
+  - ./run_functional_tests.py
 matrix:
   allow_failures:
     - rust: nightly
