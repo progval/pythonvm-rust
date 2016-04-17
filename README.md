@@ -12,7 +12,7 @@ A Python virtual machine, written in Rust.
 
 ## Goals
 
-* Compatible with CPython's bytecode from 3.4 to 3.6, in order to take advantage of [FAT Python](https://faster-cpython.readthedocs.org/fat_python.html)
+* Compatible with CPython 3.6's bytecode, in order to take advantage of [FAT Python](https://faster-cpython.readthedocs.org/fat_python.html)
 * Support CPython's implementation of the standard library
 * No crash, even when messing with code objects
 * Bytecode optimizations at runtime

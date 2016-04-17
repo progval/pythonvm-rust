@@ -3,17 +3,18 @@ rust:
   - stable
   - beta
   - nightly
-sudo: required
-dist: trusty
-addons:
-  apt:
-    packages:
-    - python3.4
 before_script:
-  - python3 -m compileall -b pythonlib examples
+  - wget https://hg.python.org/cpython/archive/tip.tar.bz2
+  - tar -xf tip.tar.bz2
+  - cd cpython-*
+  - ./configure --prefix=$HOME/.local/
+  - make -j 2
+  - make install
+  - cd ..
+  - ~/.local/bin/python3 -m compileall -b pythonlib examples
 script:
   - cargo test
-  - ./run_functional_tests.py
+  - ~/.local/bin/python3 run_functional_tests.py
 matrix:
   allow_failures:
     - rust: nightly
