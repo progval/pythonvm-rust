@@ -259,8 +259,8 @@ macro_rules! get_obj {
     ( $store:ident, $bytecode:expr ) => {{
         let mut reader: &[u8] = $bytecode;
         let mut refs = Vec::new();
-        let primitive_objects = PrimitiveObjects::new($store);
-        let obj_ref = read_object(&mut reader, &mut $store, primitive_objects, &mut refs).unwrap();
+        let primitive_objects = PrimitiveObjects::new(&mut $store);
+        let obj_ref = read_object(&mut reader, &mut $store, &primitive_objects, &mut refs).unwrap();
         $store.deref(&obj_ref).content.clone()
     }};
 }
