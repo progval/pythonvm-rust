@@ -1,7 +1,7 @@
 use std::fmt;
 use std::io;
 
-use super::super::objects::{Code, ObjectContent, ObjectRef, ObjectStore};
+use super::super::objects::{Code, ObjectContent, ObjectRef, ObjectStore, PrimitiveObjects};
 
 #[derive(Debug)]
 pub enum UnmarshalError {
@@ -73,11 +73,11 @@ fn read_unicode_string<R: io::Read>(reader: &mut R, size: usize) -> Result<Strin
 }
 
 /// Read an arbitrary number of contiguous marshal objects
-fn read_objects<R: io::Read>(reader: &mut R, store: &mut ObjectStore, references: &mut Vec<ObjectRef>, size: usize) -> Result<Vec<ObjectRef>, UnmarshalError> {
+fn read_objects<R: io::Read>(reader: &mut R, store: &mut ObjectStore, primitive_objects: &PrimitiveObjects, references: &mut Vec<ObjectRef>, size: usize) -> Result<Vec<ObjectRef>, UnmarshalError> {
     let mut vector = Vec::<ObjectRef>::new();
     vector.reserve(size);
     for _ in 0..size {
-        let object = try!(read_object(reader, store, references));
+        let object = try!(read_object(reader, store, primitive_objects, references));
         vector.push(object);
     };
     Ok(vector)
@@ -108,19 +108,17 @@ macro_rules! deref_checktype {
 /// If the flag is true, add this object to the vector of objects before reading its content
 /// (required, as the order of objects matter for references).
 macro_rules! build_container {
-    ( $reader:expr, $store:ident, $references:ident, $container:expr, $size:expr, $flag:expr) => {{
+    ( $reader:expr, $store:ident, $references:ident, $primitive_objects:ident, $factory:ident, $size:expr, $flag:expr) => {{
         if $flag {
-            let index = $references.len();
-            let obj_ref = $store.allocate(ObjectContent::Hole);
+            let obj_ref = ObjectRef::new();
             $references.push(obj_ref.clone());
-            let objects = try!(read_objects($reader, $store, $references, $size));
-            $store.replace_hole(&obj_ref, $container(objects));
-            $references[index] = obj_ref.clone();
+            let objects = try!(read_objects($reader, $store, $primitive_objects, $references, $size));
+            $store.allocate_at(obj_ref.clone(), $primitive_objects.$factory(objects));
             Ok(obj_ref)
         }
         else {
-            let objects = try!(read_objects($reader, $store, $references, $size));
-            Ok($store.allocate($container(objects)))
+            let objects = try!(read_objects($reader, $store, $primitive_objects, $references, $size));
+            Ok($store.allocate($primitive_objects.$factory(objects)))
         }
     }}
 }
@@ -129,17 +127,17 @@ macro_rules! build_container {
 /// If it is a container, read its content too.
 /// If the first bit is 1 and the marshal protocol allows the type to be referenced,
 /// add it to the list of references too.
-pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, references: &mut Vec<ObjectRef>) -> Result<ObjectRef, UnmarshalError> {
+pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, primitive_objects: &PrimitiveObjects, references: &mut Vec<ObjectRef>) -> Result<ObjectRef, UnmarshalError> {
     let byte = read_byte!(reader);
     let flag = byte & 0b10000000 != 0;
     let opcode = byte & 0b01111111;
     match opcode as char {
         '0' => return Err(UnmarshalError::UnexpectedCode("NULL object in marshal data for object".to_string())),
-        'N' => Ok(store.allocate(ObjectContent::None)),
-        'F' => Ok(store.allocate(ObjectContent::False)),
-        'T' => Ok(store.allocate(ObjectContent::True)),
+        'N' => Ok(primitive_objects.none.clone()),
+        'F' => Ok(primitive_objects.false_obj.clone()),
+        'T' => Ok(primitive_objects.true_obj.clone()),
         'i' => {
-            let obj_ref = store.allocate(ObjectContent::Int(try!(read_long(reader))));
+            let obj_ref = store.allocate(primitive_objects.new_int(try!(read_long(reader))));
             if flag {
                 references.push(obj_ref.clone());
             }
@@ -147,7 +145,7 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
         },
         'z' | 'Z' => { // “short ascii”, “short ascii interned”
             let size = read_byte!(reader) as usize;
-            let obj_ref = store.allocate(ObjectContent::String(try!(read_ascii_string(reader, size))));
+            let obj_ref = store.allocate(primitive_objects.new_string(try!(read_ascii_string(reader, size))));
             if flag {
                 references.push(obj_ref.clone());
             }
@@ -155,7 +153,7 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
         },
         'u' => { // “unicode”
             let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
-            let obj_ref = store.allocate(ObjectContent::String(try!(read_unicode_string(reader, size))));
+            let obj_ref = store.allocate(primitive_objects.new_string(try!(read_unicode_string(reader, size))));
             if flag {
                 references.push(obj_ref.clone());
             }
@@ -169,7 +167,7 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
                 Err(err) => return Err(UnmarshalError::Io(err)),
                 Ok(()) => ()
             };
-            let obj_ref = store.allocate(ObjectContent::Bytes(buf));
+            let obj_ref = store.allocate(primitive_objects.new_bytes(buf));
             if flag {
                 references.push(obj_ref.clone());
             }
@@ -177,23 +175,23 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
         },
         ')' => { // “small tuple”
             let size = read_byte!(reader) as usize;
-            build_container!(reader, store, references, ObjectContent::Tuple, size, flag)
+            build_container!(reader, store, references, primitive_objects, new_tuple, size, flag)
         },
         '(' => { // “tuple”
             let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
-            build_container!(reader, store, references, ObjectContent::Tuple, size, flag)
+            build_container!(reader, store, references, primitive_objects, new_tuple, size, flag)
         },
         '[' => { // “list”
             let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
-            build_container!(reader, store, references, ObjectContent::List, size, flag)
+            build_container!(reader, store, references, primitive_objects, new_list, size, flag)
         }
         '<' => { // “set”
             let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
-            build_container!(reader, store, references, ObjectContent::Set, size, flag)
+            build_container!(reader, store, references, primitive_objects, new_set, size, flag)
         }
         '>' => { // “frozenset”
             let size = try!(read_long(reader)) as usize; // TODO: overflow check if usize is smaller than u32
-            build_container!(reader, store, references, ObjectContent::FrozenSet, size, false)
+            build_container!(reader, store, references, primitive_objects, new_frozenset, size, false)
         }
         'r' => {
             let index = try!(read_long(reader));
@@ -202,7 +200,7 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
         },
         'c' => { // “code”
             let allocate_at = if flag {
-                let obj_ref = store.allocate(ObjectContent::Hole);
+                let obj_ref = ObjectRef::new();
                 references.push(obj_ref.clone());
                 Some(obj_ref)
             }
@@ -214,16 +212,16 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
             let nlocals = try!(read_long(reader));
             let stacksize = try!(read_long(reader));
             let flags = try!(read_long(reader));
-            let code = try!(read_object(reader, store, references));
-            let consts = try!(read_object(reader, store, references));
-            let names = try!(read_object(reader, store, references));
-            let varnames = try!(read_object(reader, store, references));
-            let freevars = try!(read_object(reader, store, references));
-            let cellvars = try!(read_object(reader, store, references));
-            let filename = try!(read_object(reader, store, references));
-            let name = try!(read_object(reader, store, references));
+            let code = try!(read_object(reader, store, primitive_objects, references));
+            let consts = try!(read_object(reader, store, primitive_objects, references));
+            let names = try!(read_object(reader, store, primitive_objects, references));
+            let varnames = try!(read_object(reader, store, primitive_objects, references));
+            let freevars = try!(read_object(reader, store, primitive_objects, references));
+            let cellvars = try!(read_object(reader, store, primitive_objects, references));
+            let filename = try!(read_object(reader, store, primitive_objects, references));
+            let name = try!(read_object(reader, store, primitive_objects, references));
             let firstlineno = try!(read_long(reader));
-            let lnotab = try!(read_object(reader, store, references)); // TODO: decode this
+            let lnotab = try!(read_object(reader, store, primitive_objects, references)); // TODO: decode this
             let code = Code {
                 argcount: argcount as usize,
                 kwonlyargcount: kwonlyargcount,
@@ -242,11 +240,11 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, referen
                 lnotab: lnotab,
             };
 
-            let obj = ObjectContent::Code(Box::new(code));
+            let obj = primitive_objects.new_code(code);
             let obj_ref = match allocate_at {
                 None => store.allocate(obj),
                 Some(obj_ref) => {
-                    store.replace_hole(&obj_ref, obj);
+                    store.allocate_at(obj_ref.clone(), obj);
                     obj_ref
                 },
             };
@@ -261,7 +259,8 @@ macro_rules! get_obj {
     ( $store:ident, $bytecode:expr ) => {{
         let mut reader: &[u8] = $bytecode;
         let mut refs = Vec::new();
-        let obj_ref = read_object(&mut reader, &mut $store, &mut refs).unwrap();
+        let primitive_objects = PrimitiveObjects::new($store);
+        let obj_ref = read_object(&mut reader, &mut $store, primitive_objects, &mut refs).unwrap();
         $store.deref(&obj_ref).content.clone()
     }};
 }

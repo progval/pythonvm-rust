@@ -32,7 +32,7 @@ fn write_stdout<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef
             },
         }
     );
-    Ok(PyResult::Return(processor.store.allocate(ObjectContent::None)))
+    Ok(PyResult::Return(processor.primitive_objects.none.clone()))
 }
 
 

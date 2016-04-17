@@ -1,6 +1,6 @@
 pub mod instructions;
 
-use super::objects::{Code, ObjectStore, ObjectRef, ObjectContent};
+use super::objects::{Code, ObjectStore, ObjectRef, ObjectContent, PrimitiveObjects, Object};
 use super::sandbox::EnvProxy;
 use super::stack::{Stack, VectorStack};
 use self::instructions::Instruction;
@@ -58,7 +58,8 @@ macro_rules! pop_stack {
 pub struct Processor<EP: EnvProxy> {
     pub envproxy: EP,
     pub store: ObjectStore,
-    pub primitives: HashMap<String, PyFunction<EP>>,
+    pub primitive_functions: HashMap<String, PyFunction<EP>>,
+    pub primitive_objects: PrimitiveObjects
 }
 
 impl<EP: EnvProxy> Processor<EP> {
@@ -66,13 +67,36 @@ impl<EP: EnvProxy> Processor<EP> {
     // Load a name from the namespace (only __primitive__ and locals for now)
     fn load_name(&mut self, namespace: &mut HashMap<String, ObjectRef>, name: String) -> Result<ObjectRef, ProcessorError> {
         if name == "__primitives__" {
-            Ok(self.store.allocate(ObjectContent::PrimitiveNamespace))
+            Ok(self.store.allocate(Object { content: ObjectContent::PrimitiveNamespace, class: self.primitive_objects.object.clone(), bases: None }))
         }
         else if let Some(obj_ref) = namespace.get(&name) {
             Ok(obj_ref.clone())
         }
         else {
-            panic!(format!("Cannot load {}: neither __primitive__ or in namespace.", name))
+            panic!(format!("Cannot load {}: neither __primitives__ or in namespace.", name))
+        }
+    }
+
+
+    fn load_attr(&mut self, obj: &Object, name: String) -> Result<ObjectRef, ProcessorError> {
+        match name.as_ref() {
+            "__bases__" => {
+                match obj.bases {
+                    Some(ref v) => Ok(self.store.allocate(self.primitive_objects.new_tuple(v.clone()))),
+                    None => Ok(self.primitive_objects.none.clone()),
+                }
+            },
+            _ => {
+                if let ObjectContent::PrimitiveNamespace = obj.content {
+                    match self.primitive_objects.names_map.get(&name) {
+                        Some(obj_ref) => Ok(obj_ref.clone()),
+                        None => Ok(self.store.allocate(Object { content: ObjectContent::PrimitiveFunction(name), class: self.primitive_objects.function_type.clone(), bases: None })),
+                    }
+                }
+                else {
+                    unimplemented!();
+                }
+            }
         }
     }
 
@@ -87,7 +111,7 @@ impl<EP: EnvProxy> Processor<EP> {
                         panic!(format!("Function {} expected at least {} arguments, but got {}.", code.name, code.argcount, args.len()))
                     };
                     let to_vararg = args.drain(code.argcount..).collect();
-                    let obj_ref = self.store.allocate(ObjectContent::Tuple(to_vararg));
+                    let obj_ref = self.store.allocate(self.primitive_objects.new_tuple(to_vararg));
                     args.push(obj_ref);
                 }
                 else if code.argcount != args.len() {
@@ -102,7 +126,7 @@ impl<EP: EnvProxy> Processor<EP> {
                 self.call_function(namespace, code_ref, args, kwargs)
             },
             ObjectContent::PrimitiveFunction(ref name) => {
-                let function = match self.primitives.get(name) {
+                let function = match self.primitive_functions.get(name) {
                     Some(function) => function.clone(),
                     None => return Err(ProcessorError::UnknownPrimitive(name.clone())),
                 };
@@ -123,7 +147,6 @@ impl<EP: EnvProxy> Processor<EP> {
         let mut stacks = Stacks { var_stack: VectorStack::new(), loop_stack: VectorStack::new() };
         loop {
             let instruction = try!(instructions.get(program_counter).ok_or(ProcessorError::InvalidProgramCounter));
-            program_counter += 1;
             match *instruction {
                 Instruction::PopTop => {
                     pop_stack!(stacks.var_stack);
@@ -163,14 +186,12 @@ impl<EP: EnvProxy> Processor<EP> {
                     stacks.var_stack.push(try!(self.load_name(namespace, name)))
                 }
                 Instruction::LoadAttr(i) => {
-                    let obj_ref = try!(stacks.var_stack.top().ok_or(ProcessorError::StackTooSmall)).clone();
+                    let obj = {
+                        let obj_ref = try!(stacks.var_stack.pop().ok_or(ProcessorError::StackTooSmall));
+                        self.store.deref(&obj_ref).clone()
+                    };
                     let name = try!(code.names.get(i).ok_or(ProcessorError::InvalidNameIndex)).clone();
-                    if let ObjectContent::PrimitiveNamespace = self.store.deref(&obj_ref).content {
-                        stacks.var_stack.push(self.store.allocate(ObjectContent::PrimitiveFunction(name)))
-                    }
-                    else {
-                        unimplemented!();
-                    }
+                    stacks.var_stack.push(try!(self.load_attr(&obj, name)))
                 },
                 Instruction::CallFunction(nb_args, nb_kwargs) => {
                     // See “Call constructs” at:
@@ -190,10 +211,11 @@ impl<EP: EnvProxy> Processor<EP> {
                         _ => panic!("Function names must be strings."),
                     };
                     let code = pop_stack!(stacks.var_stack);
-                    stacks.var_stack.push(self.store.allocate(ObjectContent::Function(func_name, code)))
+                    stacks.var_stack.push(self.store.allocate(Object { content: ObjectContent::Function(func_name, code), class: self.primitive_objects.function_type.clone(), bases: None }))
                 },
                 _ => panic!(format!("todo: instruction {:?}", *instruction)),
             }
+            program_counter += 1;
         };
     }
 
@@ -203,7 +225,7 @@ impl<EP: EnvProxy> Processor<EP> {
         let mut builtins_bytecode = self.envproxy.open_module(module_name);
         let mut buf = [0; 12];
         builtins_bytecode.read_exact(&mut buf).unwrap();
-        let builtins_code = try!(marshal::read_object(&mut builtins_bytecode, &mut self.store).map_err(ProcessorError::UnmarshalError));
+        let builtins_code = try!(marshal::read_object(&mut builtins_bytecode, &mut self.store, &self.primitive_objects).map_err(ProcessorError::UnmarshalError));
         let builtins_code = match self.store.deref(&builtins_code).content {
             ObjectContent::Code(ref code) => code.clone(),
             ref o => return Err(ProcessorError::NotACodeObject(format!("builtins code {:?}", o))),

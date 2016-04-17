@@ -33,8 +33,9 @@ pub fn run_file<R: io::Read, EP: sandbox::EnvProxy>(reader: &mut R, envproxy: EP
     try!(reader.read_exact(&mut buf).map_err(InterpreterError::Io));
     // TODO: do something with the content of the buffer
     let mut store = objects::ObjectStore::new();
-    let module = try!(marshal::read_object(reader, &mut store).map_err(InterpreterError::Unmarshal));
-    let mut processor = Processor { envproxy: envproxy, store: store, primitives: primitives::get_default_primitives() };
+    let primitive_objects = objects::PrimitiveObjects::new(&mut store);
+    let module = try!(marshal::read_object(reader, &mut store, &primitive_objects).map_err(InterpreterError::Unmarshal));
+    let mut processor = Processor { envproxy: envproxy, store: store, primitive_functions: primitives::get_default_primitives(), primitive_objects: primitive_objects };
     let result = try!(processor.run_code_object(module).map_err(InterpreterError::Processor));
     Ok((processor, result))
 }
