@@ -3,6 +3,7 @@
 pub enum Instruction {
     PopTop,
     BinarySubscr,
+    LoadBuildClass,
     ReturnValue,
     StoreName(usize),
     LoadConst(usize),
@@ -50,6 +51,7 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
             match *opcode {
                 1 => Instruction::PopTop,
                 25 => Instruction::BinarySubscr,
+                71 => Instruction::LoadBuildClass,
                 83 => Instruction::ReturnValue,
                 90 => Instruction::StoreName(self.read_argument() as usize),
                 100 => Instruction::LoadConst(self.read_argument() as usize),

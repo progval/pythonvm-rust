@@ -47,27 +47,29 @@ pub enum ObjectContent {
     Set(Vec<ObjectRef>),
     FrozenSet(Vec<ObjectRef>),
     Bytes(Vec<u8>),
-    Function(String, ObjectRef), // name, code
+    Function(ObjectRef),
     PrimitiveNamespace, // __primitives__
     PrimitiveFunction(String),
+    Class(Option<ObjectRef>),
     OtherObject,
 }
 
 #[derive(Debug)]
 #[derive(Clone)]
 pub struct Object {
+    pub name: Option<String>,
     pub content: ObjectContent,
     pub class: ObjectRef,
     pub bases: Option<Vec<ObjectRef>>, // superclasses
 }
 
 impl Object {
-    pub fn new_instance(class: ObjectRef, content: ObjectContent) -> Object {
-        Object { content: content, class: class, bases: None }
+    pub fn new_instance(name: Option<String>, class: ObjectRef, content: ObjectContent) -> Object {
+        Object { name: name, content: content, class: class, bases: None }
     }
 
-    pub fn new_class(metaclass: ObjectRef, bases: Vec<ObjectRef>) -> Object {
-        Object { content: ObjectContent::OtherObject, class: metaclass, bases: Some(bases) }
+    pub fn new_class(name: String, code: Option<ObjectRef>, metaclass: ObjectRef, bases: Vec<ObjectRef>) -> Object {
+        Object { name: Some(name), content: ObjectContent::Class(code), class: metaclass, bases: Some(bases) }
     }
 }
 
@@ -86,6 +88,11 @@ impl ObjectRef {
     // TODO: make it private
     pub fn new() -> ObjectRef {
         ObjectRef { id: CURRENT_REF_ID.fetch_add(1, Ordering::SeqCst) }
+    }
+
+    /// Like Python's is operator: reference equality
+    pub fn is(&self, other: &ObjectRef) -> bool {
+        return self.id == other.id
     }
 }
 
@@ -163,28 +170,28 @@ impl PrimitiveObjects {
     pub fn new(store: &mut ObjectStore) -> PrimitiveObjects {
         let obj_ref = ObjectRef::new();
         let type_ref = ObjectRef::new();
-        let obj = Object { content: ObjectContent::OtherObject, bases: Some(vec![]), class: type_ref.clone() };
-        let type_ = Object { content: ObjectContent::OtherObject, bases: Some(vec![obj_ref.clone()]), class: type_ref.clone() };
+        let obj = Object { name: Some("object".to_string()), content: ObjectContent::OtherObject, bases: Some(vec![]), class: type_ref.clone() };
+        let type_ = Object { name: Some("type".to_string()), content: ObjectContent::OtherObject, bases: Some(vec![obj_ref.clone()]), class: type_ref.clone() };
         store.allocate_at(obj_ref.clone(), obj);
         store.allocate_at(type_ref.clone(), type_);
 
-        let none_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
-        let none = store.allocate(Object::new_instance(none_type.clone(), ObjectContent::None));
+        let none_type = store.allocate(Object::new_class("nonetype".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let none = store.allocate(Object::new_instance(Some("None".to_string()), none_type.clone(), ObjectContent::None));
 
-        let int_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
-        let bool_type = store.allocate(Object::new_class(type_ref.clone(), vec![int_type.clone()]));
-        let true_obj = store.allocate(Object::new_instance(bool_type.clone(), ObjectContent::True));
-        let false_obj = store.allocate(Object::new_instance(bool_type.clone(), ObjectContent::False));
+        let int_type = store.allocate(Object::new_class("int".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let bool_type = store.allocate(Object::new_class("bool".to_string(), None, type_ref.clone(), vec![int_type.clone()]));
+        let true_obj = store.allocate(Object::new_instance(Some("True".to_string()), bool_type.clone(), ObjectContent::True));
+        let false_obj = store.allocate(Object::new_instance(Some("False".to_string()), bool_type.clone(), ObjectContent::False));
 
-        let tuple_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
-        let list_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
-        let set_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
-        let frozenset_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
-        let bytes_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
-        let str_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
+        let tuple_type = store.allocate(Object::new_class("tuple".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let list_type = store.allocate(Object::new_class("list".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let set_type = store.allocate(Object::new_class("set".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let frozenset_type = store.allocate(Object::new_class("frozenset".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let bytes_type = store.allocate(Object::new_class("bytes".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let str_type = store.allocate(Object::new_class("str".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
 
-        let function_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
-        let code_type = store.allocate(Object::new_class(type_ref.clone(), vec![obj_ref.clone()]));
+        let function_type = store.allocate(Object::new_class("function".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let code_type = store.allocate(Object::new_class("code".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
 
         let mut map = HashMap::new();
         map.insert("object".to_string(), obj_ref.clone());
@@ -217,27 +224,27 @@ impl PrimitiveObjects {
     }
 
     pub fn new_int(&self, i: u32) -> Object {
-        Object::new_instance(self.int_type.clone(), ObjectContent::Int(i))
+        Object::new_instance(None, self.int_type.clone(), ObjectContent::Int(i))
     }
     pub fn new_string(&self, s: String) -> Object {
-        Object::new_instance(self.str_type.clone(), ObjectContent::String(s))
+        Object::new_instance(None, self.str_type.clone(), ObjectContent::String(s))
     }
     pub fn new_bytes(&self, b: Vec<u8>) -> Object {
-        Object::new_instance(self.bytes_type.clone(), ObjectContent::Bytes(b))
+        Object::new_instance(None, self.bytes_type.clone(), ObjectContent::Bytes(b))
     }
     pub fn new_tuple(&self, v: Vec<ObjectRef>) -> Object {
-        Object::new_instance(self.tuple_type.clone(), ObjectContent::Tuple(v))
+        Object::new_instance(None, self.tuple_type.clone(), ObjectContent::Tuple(v))
     }
     pub fn new_list(&self, v: Vec<ObjectRef>) -> Object {
-        Object::new_instance(self.list_type.clone(), ObjectContent::List(v))
+        Object::new_instance(None, self.list_type.clone(), ObjectContent::List(v))
     }
     pub fn new_set(&self, v: Vec<ObjectRef>) -> Object {
-        Object::new_instance(self.set_type.clone(), ObjectContent::Set(v))
+        Object::new_instance(None, self.set_type.clone(), ObjectContent::Set(v))
     }
     pub fn new_frozenset(&self, v: Vec<ObjectRef>) -> Object {
-        Object::new_instance(self.frozenset_type.clone(), ObjectContent::FrozenSet(v))
+        Object::new_instance(None, self.frozenset_type.clone(), ObjectContent::FrozenSet(v))
     }
     pub fn new_code(&self, c: Code) -> Object {
-        Object::new_instance(self.code_type.clone(), ObjectContent::Code(Box::new(c)))
+        Object::new_instance(None, self.code_type.clone(), ObjectContent::Code(Box::new(c)))
     }
 }

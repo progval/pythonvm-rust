@@ -14,6 +14,7 @@ pub enum ProcessorError {
     CircularReference,
     InvalidReference,
     NotACodeObject(String),
+    NotAFunctionObject(String),
     CodeObjectIsNotBytes,
     InvalidProgramCounter,
     StackTooSmall,
@@ -68,7 +69,10 @@ impl<EP: EnvProxy> Processor<EP> {
     // Load a name from the namespace (only __primitive__ and locals for now)
     fn load_name(&mut self, namespace: &mut HashMap<String, ObjectRef>, name: String) -> Result<ObjectRef, ProcessorError> {
         if name == "__primitives__" {
-            Ok(self.store.allocate(Object { content: ObjectContent::PrimitiveNamespace, class: self.primitive_objects.object.clone(), bases: None }))
+            Ok(self.store.allocate(Object { name: Some("__primitives__".to_string()), content: ObjectContent::PrimitiveNamespace, class: self.primitive_objects.object.clone(), bases: None }))
+        }
+        else if name == "__name__" {
+            Ok(self.store.allocate(self.primitive_objects.new_string("<module>".to_string())))
         }
         else if let Some(obj_ref) = namespace.get(&name) {
             Ok(obj_ref.clone())
@@ -87,15 +91,21 @@ impl<EP: EnvProxy> Processor<EP> {
                     None => Ok(self.primitive_objects.none.clone()),
                 }
             },
+            "__name__" => {
+                match obj.name {
+                    Some(ref s) => Ok(self.store.allocate(self.primitive_objects.new_string(s.clone()))),
+                    None => panic!("No __name__"),
+                }
+            },
             _ => {
                 if let ObjectContent::PrimitiveNamespace = obj.content {
                     match self.primitive_objects.names_map.get(&name) {
                         Some(obj_ref) => Ok(obj_ref.clone()),
-                        None => Ok(self.store.allocate(Object { content: ObjectContent::PrimitiveFunction(name), class: self.primitive_objects.function_type.clone(), bases: None })),
+                        None => Ok(self.store.allocate(Object { name: Some(name.clone()), content: ObjectContent::PrimitiveFunction(name), class: self.primitive_objects.function_type.clone(), bases: None })),
                     }
                 }
                 else {
-                    unimplemented!();
+                    panic!(format!("Not implemented: looking up attribute '{}' of {:?}", name, obj))
                 }
             }
         }
@@ -105,26 +115,40 @@ impl<EP: EnvProxy> Processor<EP> {
     fn call_function(&mut self, namespace: &mut HashMap<String, ObjectRef>, func_ref: &ObjectRef, mut args: Vec<ObjectRef>, kwargs: Vec<ObjectRef>) -> Result<PyResult, ProcessorError> {
         // TODO: clone only if necessary
         match self.store.deref(func_ref).content.clone() {
-            ObjectContent::Code(code) => {
-                let mut namespace = namespace.clone(); // TODO: costly, try maybe copy-on-write?
-                if code.co_varargs() { // If it has a *args argument
-                    if code.argcount > args.len() {
-                        panic!(format!("Function {} expected at least {} arguments, but got {}.", code.name, code.argcount, args.len()))
-                    };
-                    let to_vararg = args.drain(code.argcount..).collect();
-                    let obj_ref = self.store.allocate(self.primitive_objects.new_tuple(to_vararg));
-                    args.push(obj_ref);
-                }
-                else if code.argcount != args.len() {
-                    panic!(format!("Function {} expected {} arguments, but got {}.", code.name, code.argcount, args.len()))
-                };
-                for (argname, argvalue) in code.varnames.iter().zip(args) {
-                    namespace.insert(argname.clone(), argvalue);
-                };
-                self.run_code(&mut namespace, (*code).clone())
+            ObjectContent::Class(None) => {
+                Ok(PyResult::Return(self.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject))))
             },
-            ObjectContent::Function(ref _name, ref code_ref) => {
-                self.call_function(namespace, code_ref, args, kwargs)
+            ObjectContent::Class(Some(ref code_ref)) => {
+                // TODO: run code
+                Ok(PyResult::Return(self.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject))))
+            },
+            ObjectContent::Function(ref code_ref) => {
+                match self.store.deref(code_ref).content.clone() {
+                    ObjectContent::Code(code) => {
+                        let mut namespace = namespace.clone(); // TODO: costly, try maybe copy-on-write?
+                        if code.co_varargs() { // If it has a *args argument
+                            if code.argcount > args.len() {
+                                panic!(format!("Function {} expected at least {} arguments, but got {}.", code.name, code.argcount, args.len()))
+                            };
+                            let to_vararg = args.drain(code.argcount..).collect();
+                            let obj_ref = self.store.allocate(self.primitive_objects.new_tuple(to_vararg));
+                            args.push(obj_ref);
+                        }
+                        else if code.argcount != args.len() {
+                            panic!(format!("Function {} expected {} arguments, but got {}.", code.name, code.argcount, args.len()))
+                        };
+                        for (argname, argvalue) in code.varnames.iter().zip(args) {
+                            namespace.insert(argname.clone(), argvalue);
+                        };
+                        self.run_code(&mut namespace, (*code).clone())
+                    },
+                    ref o => {
+                        match self.store.deref(func_ref).name {
+                            None => return Err(ProcessorError::NotACodeObject(format!("anonymous function has code {:?}", o))),
+                            Some(ref name) => return Err(ProcessorError::NotACodeObject(format!("function {} has code {:?}", name, o))),
+                        }
+                    }
+                }
             },
             ObjectContent::PrimitiveFunction(ref name) => {
                 let function = match self.primitive_functions.get(name) {
@@ -133,8 +157,8 @@ impl<EP: EnvProxy> Processor<EP> {
                 };
                 function(self, args)
             },
-            ref o => {
-                return Err(ProcessorError::NotACodeObject(format!("called {:?}", o)));
+            _ => {
+                return Err(ProcessorError::NotAFunctionObject(format!("called {:?}", self.store.deref(func_ref))));
             }
         }
     }
@@ -167,6 +191,10 @@ impl<EP: EnvProxy> Processor<EP> {
                         }
                         _ => panic!("Indexing only supported for tuples/lists with an integer.")
                     }
+                }
+                Instruction::LoadBuildClass => {
+                    let obj = Object { name: Some("__build_class__".to_string()), content: ObjectContent::PrimitiveFunction("build_class".to_string()), class: self.primitive_objects.function_type.clone(), bases: None };
+                    stacks.var_stack.push(self.store.allocate(obj));
                 }
                 Instruction::ReturnValue => return Ok(PyResult::Return(pop_stack!(stacks.var_stack))),
                 Instruction::StoreName(i) => {
@@ -213,7 +241,7 @@ impl<EP: EnvProxy> Processor<EP> {
                         _ => panic!("Function names must be strings."),
                     };
                     let code = pop_stack!(stacks.var_stack);
-                    stacks.var_stack.push(self.store.allocate(Object { content: ObjectContent::Function(func_name, code), class: self.primitive_objects.function_type.clone(), bases: None }))
+                    stacks.var_stack.push(self.store.allocate(Object { name: Some(func_name), content: ObjectContent::Function(code), class: self.primitive_objects.function_type.clone(), bases: None }))
                 },
                 _ => panic!(format!("todo: instruction {:?}", *instruction)),
             }
@@ -227,6 +255,9 @@ impl<EP: EnvProxy> Processor<EP> {
         let mut builtins_bytecode = self.envproxy.open_module(module_name);
         let mut buf = [0; 12];
         builtins_bytecode.read_exact(&mut buf).unwrap();
+        if !marshal::check_magic(&buf[0..4]) {
+            panic!("Bad magic number for builtins.py.")
+        }
         let builtins_code = try!(marshal::read_object(&mut builtins_bytecode, &mut self.store, &self.primitive_objects).map_err(ProcessorError::UnmarshalError));
         let builtins_code = match self.store.deref(&builtins_code).content {
             ObjectContent::Code(ref code) => code.clone(),

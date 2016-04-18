@@ -1,6 +1,7 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.6
 
 import os
+import sys
 import glob
 import subprocess
 
@@ -9,14 +10,14 @@ BIN = os.path.join(SOURCE_DIR, 'target', 'debug', 'pythonvm')
 LIB_DIR = os.path.join(SOURCE_DIR, 'pythonlib')
 TESTS_DIR = os.path.join(SOURCE_DIR, 'functional_tests')
 
-subprocess.check_call(['/usr/bin/env', 'python3', '-m', 'compileall', '-b', TESTS_DIR],
+subprocess.check_call([sys.executable, '-m', 'compileall', '-b', TESTS_DIR],
         stdout=subprocess.DEVNULL)
 
 all_ok = True
 
 for filename in glob.glob(TESTS_DIR + os.path.sep + '*.py'):
-    vm_result = subprocess.check_output([BIN, LIB_DIR, filename + 'c'])
-    system_python_result = subprocess.check_output(['/usr/bin/env', 'python3', filename])
+    vm_result = subprocess.check_output([BIN, LIB_DIR, filename + 'c'], universal_newlines=True)
+    system_python_result = subprocess.check_output([sys.executable, filename], universal_newlines=True)
     if vm_result != system_python_result:
         print('=' * 100)
         print('Test {} failed.'.format(filename))

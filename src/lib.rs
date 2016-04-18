@@ -31,7 +31,9 @@ impl fmt::Display for InterpreterError {
 pub fn run_file<R: io::Read, EP: sandbox::EnvProxy>(reader: &mut R, envproxy: EP) -> Result<(Processor<EP>, PyResult), InterpreterError> {
     let mut buf = [0; 12];
     try!(reader.read_exact(&mut buf).map_err(InterpreterError::Io));
-    // TODO: do something with the content of the buffer
+    if !marshal::check_magic(&buf[0..4]) {
+        panic!("Bad magic number for main file.")
+    }
     let mut store = objects::ObjectStore::new();
     let primitive_objects = objects::PrimitiveObjects::new(&mut store);
     let module = try!(marshal::read_object(reader, &mut store, &primitive_objects).map_err(InterpreterError::Unmarshal));
