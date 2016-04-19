@@ -3,7 +3,7 @@ pub mod instructions;
 use super::objects::{Code, ObjectStore, ObjectRef, ObjectContent, PrimitiveObjects, Object};
 use super::sandbox::EnvProxy;
 use super::stack::{Stack, VectorStack};
-use self::instructions::Instruction;
+use self::instructions::{CmpOperator, Instruction};
 use std::fmt;
 use std::collections::HashMap;
 use std::io::Read;
@@ -172,11 +172,13 @@ impl<EP: EnvProxy> Processor<EP> {
         let mut stacks = Stacks { var_stack: VectorStack::new(), loop_stack: VectorStack::new() };
         loop {
             let instruction = try!(instructions.get(program_counter).ok_or(ProcessorError::InvalidProgramCounter));
+            program_counter += 1;
             match *instruction {
                 Instruction::PopTop => {
                     pop_stack!(stacks.var_stack);
                     ()
                 },
+                Instruction::Nop => (),
                 Instruction::BinarySubscr => {
                     let index_ref = pop_stack!(stacks.var_stack);
                     let index = self.store.deref(&index_ref).content.clone();
@@ -207,13 +209,6 @@ impl<EP: EnvProxy> Processor<EP> {
                     let name = try!(code.names.get(i).ok_or(ProcessorError::InvalidNameIndex)).clone();
                     stacks.var_stack.push(try!(self.load_name(namespace, name)))
                 }
-                Instruction::SetupLoop(i) => {
-                    stacks.loop_stack.push(Loop { begin: program_counter, end: program_counter+i })
-                }
-                Instruction::LoadFast(i) => {
-                    let name = try!(code.varnames.get(i).ok_or(ProcessorError::InvalidVarnameIndex)).clone();
-                    stacks.var_stack.push(try!(self.load_name(namespace, name)))
-                }
                 Instruction::LoadAttr(i) => {
                     let obj = {
                         let obj_ref = try!(stacks.var_stack.pop().ok_or(ProcessorError::StackTooSmall));
@@ -222,6 +217,36 @@ impl<EP: EnvProxy> Processor<EP> {
                     let name = try!(code.names.get(i).ok_or(ProcessorError::InvalidNameIndex)).clone();
                     stacks.var_stack.push(try!(self.load_attr(&obj, name)))
                 },
+                Instruction::SetupLoop(i) => {
+                    stacks.loop_stack.push(Loop { begin: program_counter, end: program_counter+i })
+                }
+                Instruction::CompareOp(CmpOperator::Eq) => {
+                    // TODO: enhance this
+                    let obj1 = self.store.deref(&pop_stack!(stacks.var_stack));
+                    let obj2 = self.store.deref(&pop_stack!(stacks.var_stack));
+                    if obj1.name == obj2.name && obj1.content == obj2.content {
+                        stacks.var_stack.push(self.primitive_objects.true_obj.clone())
+                    }
+                    else {
+                        stacks.var_stack.push(self.primitive_objects.false_obj.clone())
+                    };
+                }
+                Instruction::JumpForward(delta) => {
+                    program_counter += delta
+                }
+                Instruction::LoadFast(i) => {
+                    let name = try!(code.varnames.get(i).ok_or(ProcessorError::InvalidVarnameIndex)).clone();
+                    stacks.var_stack.push(try!(self.load_name(namespace, name)))
+                }
+                Instruction::PopJumpIfFalse(target) => {
+                    let obj = self.store.deref(&pop_stack!(stacks.var_stack));
+                    match obj.content {
+                        ObjectContent::True => (),
+                        ObjectContent::False => program_counter = target,
+                        _ => unimplemented!(),
+                    }
+                }
+
                 Instruction::CallFunction(nb_args, nb_kwargs) => {
                     // See “Call constructs” at:
                     // http://security.coverity.com/blog/2014/Nov/understanding-python-bytecode.html
@@ -245,7 +270,6 @@ impl<EP: EnvProxy> Processor<EP> {
                 },
                 _ => panic!(format!("todo: instruction {:?}", *instruction)),
             }
-            program_counter += 1;
         };
     }
 
