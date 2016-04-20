@@ -34,27 +34,55 @@ impl fmt::Display for ProcessorError {
 #[derive(Debug)]
 pub enum PyResult {
     Return(ObjectRef),
-    Raise(ObjectRef),
+    Raise(ObjectRef, ObjectRef), // (exception, exc_type)
 }
 
 
 pub type PyFunction<EP> = fn(&mut Processor<EP>, Vec<ObjectRef>) -> Result<PyResult, ProcessorError>;
 
 #[derive(Debug)]
-struct Loop {
-    begin: usize,
-    end: usize,
+enum Block {
+    Loop(usize, usize), // begin, end
+    TryExcept(usize, usize), // begin, end
 }
 
 struct Stacks {
     var_stack: VectorStack<ObjectRef>,
-    loop_stack: VectorStack<Loop>,
+    block_stack: VectorStack<Block>,
 }
 
 macro_rules! pop_stack {
     ( $stack_name:expr) => {
         try!($stack_name.pop().ok_or(ProcessorError::StackTooSmall))
     }
+}
+
+macro_rules! raise {
+    ($stacks: expr, $program_counter: ident, $traceback: expr, $exception: expr, $exc_type: expr, $value: expr) => {{
+        loop {
+            match $stacks.block_stack.pop() {
+                None => { // Root block; raise exception to calling function
+                    return Ok(PyResult::Raise($exception, $exc_type))
+                }
+                Some(Block::TryExcept(begin, end)) => { // Found a try…except block
+                    $stacks.block_stack.push(Block::TryExcept(begin, end)); // Push it back, it will be poped by PopExcept.
+                    $program_counter = end;
+                    let traceback = $traceback;
+                    let exception = $exception;
+                    $stacks.var_stack.push(traceback.clone()); // traceback
+                    $stacks.var_stack.push(exception.clone()); // exception
+                    $stacks.var_stack.push($exc_type); // exception type
+
+                    $stacks.var_stack.push(traceback); // traceback
+                    $stacks.var_stack.push($value); // value
+                    $stacks.var_stack.push(exception); // exception
+                    break
+                }
+                Some(_) => { // Non-try…except block, exit it.
+                }
+            }
+        }
+    }}
 }
 
 pub struct Processor<EP: EnvProxy> {
@@ -169,7 +197,7 @@ impl<EP: EnvProxy> Processor<EP> {
         let bytecode: Vec<u8> = code.code;
         let instructions: Vec<Instruction> = instructions::InstructionDecoder::new(bytecode.iter()).into_iter().collect();
         let mut program_counter = 0 as usize;
-        let mut stacks = Stacks { var_stack: VectorStack::new(), loop_stack: VectorStack::new() };
+        let mut stacks = Stacks { var_stack: VectorStack::new(), block_stack: VectorStack::new() };
         loop {
             let instruction = try!(instructions.get(program_counter).ok_or(ProcessorError::InvalidProgramCounter));
             program_counter += 1;
@@ -178,6 +206,11 @@ impl<EP: EnvProxy> Processor<EP> {
                     pop_stack!(stacks.var_stack);
                     ()
                 },
+                Instruction::DupTop => {
+                    let val = pop_stack!(stacks.var_stack);
+                    stacks.var_stack.push(val.clone());
+                    stacks.var_stack.push(val);
+                }
                 Instruction::Nop => (),
                 Instruction::BinarySubscr => {
                     let index_ref = pop_stack!(stacks.var_stack);
@@ -199,6 +232,24 @@ impl<EP: EnvProxy> Processor<EP> {
                     stacks.var_stack.push(self.store.allocate(obj));
                 }
                 Instruction::ReturnValue => return Ok(PyResult::Return(pop_stack!(stacks.var_stack))),
+                Instruction::PopBlock => { pop_stack!(stacks.block_stack); },
+                Instruction::EndFinally => {
+                    let status_ref = pop_stack!(stacks.var_stack);
+                    let status = self.store.deref(&status_ref);
+                    match status.content {
+                        ObjectContent::Int(i) => panic!("TODO: finally int status"), // TODO
+                        ObjectContent::OtherObject => {}
+                        _ => panic!("Invalid finally status")
+                    }
+                }
+                Instruction::PopExcept => {
+                    let mut three_last = stacks.var_stack.pop_all_and_get_n_last(3).unwrap(); // TODO: check
+                    let exc_type = three_last.pop();
+                    let exc_value = three_last.pop();
+                    let exc_traceback = three_last.pop();
+                    // TODO: do something with exc_*
+                    pop_stack!(stacks.block_stack);
+                },
                 Instruction::StoreName(i) => {
                     let name = try!(code.names.get(i).ok_or(ProcessorError::InvalidNameIndex)).clone();
                     let obj_ref = pop_stack!(stacks.var_stack);
@@ -218,10 +269,13 @@ impl<EP: EnvProxy> Processor<EP> {
                     stacks.var_stack.push(try!(self.load_attr(&obj, name)))
                 },
                 Instruction::SetupLoop(i) => {
-                    stacks.loop_stack.push(Loop { begin: program_counter, end: program_counter+i })
+                    stacks.block_stack.push(Block::Loop(program_counter, program_counter+i))
+                }
+                Instruction::SetupExcept(i) => {
+                    stacks.block_stack.push(Block::TryExcept(program_counter, program_counter+i))
                 }
                 Instruction::CompareOp(CmpOperator::Eq) => {
-                    // TODO: enhance this
+                    // TODO: enrich this (support __eq__)
                     let obj1 = self.store.deref(&pop_stack!(stacks.var_stack));
                     let obj2 = self.store.deref(&pop_stack!(stacks.var_stack));
                     if obj1.name == obj2.name && obj1.content == obj2.content {
@@ -230,6 +284,17 @@ impl<EP: EnvProxy> Processor<EP> {
                     else {
                         stacks.var_stack.push(self.primitive_objects.false_obj.clone())
                     };
+                }
+                Instruction::CompareOp(CmpOperator::ExceptionMatch) => {
+                    // TODO: add support for tuples
+                    let pattern_ref = pop_stack!(stacks.var_stack);
+                    let exc_ref = pop_stack!(stacks.var_stack);
+                    let isinstance = self.primitive_functions.get("isinstance").unwrap().clone();
+                    let res = try!(isinstance(self, vec![exc_ref, pattern_ref]));
+                    match res {
+                        PyResult::Return(v) => stacks.var_stack.push(v),
+                        _ => panic!("Unexpected result of isinstance()")
+                    }
                 }
                 Instruction::JumpForward(delta) => {
                     program_counter += delta
@@ -247,6 +312,23 @@ impl<EP: EnvProxy> Processor<EP> {
                     }
                 }
 
+                Instruction::RaiseVarargs(0) => {
+                    panic!("RaiseVarargs(0) not implemented.")
+                }
+                Instruction::RaiseVarargs(1) => {
+                    let exception = pop_stack!(stacks.var_stack);
+                    let exc_type = exception.clone();
+                    // TODO: add traceback
+                    raise!(stacks, program_counter, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone());
+                }
+                Instruction::RaiseVarargs(2) => {
+                    panic!("RaiseVarargs(2) not implemented.")
+                }
+                Instruction::RaiseVarargs(_) => {
+                    // Note: the doc lies, the argument can only be ≤ 2
+                    panic!("Bad RaiseVarargs argument") // TODO: Raise an exception instead
+                }
+
                 Instruction::CallFunction(nb_args, nb_kwargs) => {
                     // See “Call constructs” at:
                     // http://security.coverity.com/blog/2014/Nov/understanding-python-bytecode.html
@@ -256,7 +338,10 @@ impl<EP: EnvProxy> Processor<EP> {
                     let ret = try!(self.call_function(namespace, &func, args, kwargs));
                     match ret {
                         PyResult::Return(obj_ref) => stacks.var_stack.push(obj_ref),
-                        PyResult::Raise(obj_ref) => return Ok(PyResult::Raise(obj_ref))
+                        PyResult::Raise(exception, exc_type) => {
+                            // TODO: add frame to traceback
+                            raise!(stacks, program_counter, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone())
+                        }
                     };
                 },
                 Instruction::MakeFunction(0, 0, 0) => {

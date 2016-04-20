@@ -37,21 +37,27 @@ impl CmpOperator {
 #[derive(Debug)]
 pub enum Instruction {
     PopTop,
+    DupTop,
     Nop,
     BinarySubscr,
     LoadBuildClass,
     ReturnValue,
+    PopBlock,
+    EndFinally,
+    PopExcept,
     StoreName(usize),
     LoadConst(usize),
     LoadName(usize),
     LoadAttr(usize),
     SetupLoop(usize),
+    SetupExcept(usize),
     CompareOp(CmpOperator),
     JumpForward(usize),
     PopJumpIfFalse(usize),
     LoadFast(usize),
     LoadGlobal(usize),
     CallFunction(usize, usize), // nb_args, nb_kwargs
+    RaiseVarargs(u16),
     MakeFunction(usize, usize, usize), // nb_default_args, nb_default_kwargs, nb_annot
 }
 
@@ -98,9 +104,13 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
         self.bytestream.next().map(|opcode| {
             match *opcode {
                 1 => Instruction::PopTop,
+                4 => Instruction::DupTop,
                 25 => Instruction::BinarySubscr,
                 71 => Instruction::LoadBuildClass,
                 83 => Instruction::ReturnValue,
+                87 => Instruction::PopBlock,
+                88 => Instruction::EndFinally,
+                89 => Instruction::PopExcept,
                 90 => Instruction::StoreName(self.read_argument() as usize),
                 100 => Instruction::LoadConst(self.read_argument() as usize),
                 101 => Instruction::LoadName(self.read_argument() as usize),
@@ -109,8 +119,10 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
                 110 => Instruction::JumpForward(self.read_argument() as usize + 2), // +2, because JumpForward takes 3 bytes, and the relative address is computed from the next instruction.
                 114 => Instruction::PopJumpIfFalse(self.read_argument() as usize),
                 116 => Instruction::LoadGlobal(self.read_argument() as usize),
-                120 => Instruction::SetupLoop(self.read_argument() as usize),
+                120 => Instruction::SetupLoop(self.read_argument() as usize + 2),
+                121 => Instruction::SetupExcept(self.read_argument() as usize + 2),
                 124 => Instruction::LoadFast(self.read_argument() as usize),
+                130 => Instruction::RaiseVarargs(self.read_argument() as u16),
                 131 => Instruction::CallFunction(self.read_byte() as usize, self.read_byte() as usize),
                 132 => {
                     let arg = self.read_argument();

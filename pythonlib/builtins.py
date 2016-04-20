@@ -1,3 +1,6 @@
+BaseException = __primitives__.BaseException
+RuntimeError = __primitives__.RuntimeError
+
 def print(value):
     __primitives__.write_stdout(value)
     __primitives__.write_stdout("\n")

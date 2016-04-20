@@ -163,6 +163,9 @@ pub struct PrimitiveObjects {
     pub function_type: ObjectRef,
     pub code_type: ObjectRef,
 
+    pub baseexception: ObjectRef,
+    pub runtimeerror: ObjectRef,
+
     pub names_map: HashMap<String, ObjectRef>,
 }
 
@@ -193,6 +196,9 @@ impl PrimitiveObjects {
         let function_type = store.allocate(Object::new_class("function".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let code_type = store.allocate(Object::new_class("code".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
 
+        let baseexception = store.allocate(Object::new_class("BaseException".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let runtimeerror = store.allocate(Object::new_class("RuntimeError".to_string(), None, type_ref.clone(), vec![baseexception.clone()]));
+
         let mut map = HashMap::new();
         map.insert("object".to_string(), obj_ref.clone());
         map.insert("tuple".to_string(), type_ref.clone());
@@ -210,6 +216,8 @@ impl PrimitiveObjects {
         map.insert("str".to_string(), str_type.clone());
         map.insert("function".to_string(), function_type.clone());
         map.insert("code".to_string(), code_type.clone());
+        map.insert("BaseException".to_string(), baseexception.clone());
+        map.insert("RuntimeError".to_string(), runtimeerror.clone());
 
         PrimitiveObjects {
             object: obj_ref, type_: type_ref,
@@ -219,6 +227,7 @@ impl PrimitiveObjects {
             set_type: set_type, frozenset_type: frozenset_type,
             bytes_type: bytes_type, str_type: str_type,
             function_type: function_type, code_type: code_type,
+            baseexception: baseexception, runtimeerror: runtimeerror,
             names_map: map,
         }
     }

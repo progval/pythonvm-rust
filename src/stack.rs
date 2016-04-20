@@ -7,6 +7,7 @@ pub trait Stack : Debug {
     fn pop(&mut self) -> Option<Self::Item>;
     fn pop_many(&mut self, count: usize) -> Option<Vec<Self::Item>>;
     fn push(&mut self, value: Self::Item);
+    fn pop_all_and_get_n_last(&mut self, nb: usize) -> Option<Vec<Self::Item>>;
 }
 
 #[derive(Debug)]
@@ -43,5 +44,15 @@ impl<Item> Stack for VectorStack<Item> where Item: Debug {
 
     fn push(&mut self, value: Self::Item) {
         self.vector.push(value)
+    }
+
+    fn pop_all_and_get_n_last(&mut self, nb: usize) -> Option<Vec<Self::Item>> {
+        if self.vector.len() < nb {
+            None
+        }
+        else {
+            self.vector.truncate(nb);
+            Some(self.vector.drain(..).collect())
+        }
     }
 }
