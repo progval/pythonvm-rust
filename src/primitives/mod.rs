@@ -31,7 +31,7 @@ macro_rules! parse_arguments {
     }};
 }
 
-fn write_stdout<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> Result<PyResult, ProcessorError> {
+fn write_stdout<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> PyResult {
     parse_arguments!("__primitives__.write_stdout", processor.store, args,
         "value" "a string, boolean, or integer": {
             ObjectContent::String(ref s) => {
@@ -48,10 +48,10 @@ fn write_stdout<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef
             },
         }
     );
-    Ok(PyResult::Return(processor.primitive_objects.none.clone()))
+    PyResult::Return(processor.primitive_objects.none.clone())
 }
 
-fn build_class<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> Result<PyResult, ProcessorError> {
+fn build_class<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> PyResult {
     let name;
     let code;
     let mut args_iter = args.into_iter();
@@ -72,10 +72,10 @@ fn build_class<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>
     else {
         bases
     };
-    Ok(PyResult::Return(processor.store.allocate(Object::new_class(name, Some(code), processor.primitive_objects.type_.clone(), bases))))
+    PyResult::Return(processor.store.allocate(Object::new_class(name, Some(code), processor.primitive_objects.type_.clone(), bases)))
 }
 
-fn issubclass<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> Result<PyResult, ProcessorError> {
+fn issubclass<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> PyResult {
     if args.len() != 2 {
         panic!(format!("__primitives__.issubclass takes 2 arguments, not {}", args.len()))
     }
@@ -90,7 +90,7 @@ fn issubclass<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>)
             continue
         };
         if candidate.is(second) {
-            return Ok(PyResult::Return(processor.primitive_objects.true_obj.clone()))
+            return PyResult::Return(processor.primitive_objects.true_obj.clone())
         };
         match processor.store.deref(&candidate).bases {
             None => (),
@@ -101,10 +101,10 @@ fn issubclass<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>)
             }
         };
     }
-    Ok(PyResult::Return(processor.primitive_objects.false_obj.clone()))
+    PyResult::Return(processor.primitive_objects.false_obj.clone())
 }
 
-fn isinstance<EP: EnvProxy>(processor: &mut Processor<EP>, mut args: Vec<ObjectRef>) -> Result<PyResult, ProcessorError> {
+fn isinstance<EP: EnvProxy>(processor: &mut Processor<EP>, mut args: Vec<ObjectRef>) -> PyResult {
     if args.len() != 2 {
         panic!(format!("__primitives__.isinstance takes 2 arguments, not {}", args.len()))
     }
