@@ -12,3 +12,4 @@ name = "pythonvm"
 path = "src/bin.rs"
 
 [dependencies]
+itertools = "*"

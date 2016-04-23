@@ -1,6 +1,8 @@
+extern crate itertools;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use std::fmt;
+use self::itertools::Itertools;
 
 #[derive(Debug)]
 #[derive(Clone)]
@@ -35,7 +37,6 @@ impl Code {
 #[derive(PartialEq)]
 #[derive(Eq)]
 pub enum ObjectContent {
-    Hole, // Temporary object
     None,
     True,
     False,
@@ -93,6 +94,42 @@ impl ObjectRef {
     /// Like Python's is operator: reference equality
     pub fn is(&self, other: &ObjectRef) -> bool {
         return self.id == other.id
+    }
+
+    fn repr_vec(l: &Vec<ObjectRef>, store: &ObjectStore) -> String {
+        l.iter().map(|r| r.repr(store)).join(", ")
+    }
+
+    pub fn repr(&self, store: &ObjectStore) -> String {
+        let obj = store.deref(self);
+        match obj.content {
+            ObjectContent::None => "None".to_string(),
+            ObjectContent::True => "True".to_string(),
+            ObjectContent::False => "False".to_string(),
+            ObjectContent::Int(ref i) => i.to_string(),
+            ObjectContent::Bytes(ref s) => "<bytes>".to_string(), // TODO
+            ObjectContent::String(ref s) => format!("'{}'", s), // TODO: escape
+            ObjectContent::Tuple(ref l) => format!("tuple({})", ObjectRef::repr_vec(l, store)),
+            ObjectContent::List(ref l) => format!("[{}]", ObjectRef::repr_vec(l, store)),
+            ObjectContent::Code(_) => "<code object>".to_string(),
+            ObjectContent::Set(ref l) => format!("set({})", ObjectRef::repr_vec(l, store)),
+            ObjectContent::FrozenSet(ref l) => format!("frozenset({})", ObjectRef::repr_vec(l, store)),
+            ObjectContent::Function(_) => {
+                match obj.name {
+                    None => "<anonymous function>".to_string(),
+                    Some(ref s) => format!("<function {}>", s),
+                }
+            },
+            ObjectContent::PrimitiveNamespace => "__primitives__".to_string(),
+            ObjectContent::PrimitiveFunction(ref s) => format!("__primitives__.{}", s),
+            ObjectContent::Class(_) => {
+                match obj.name {
+                    None => "<anonymous class>".to_string(),
+                    Some(ref s) => format!("<class {}>", s),
+                }
+            },
+            ObjectContent::OtherObject => format!("<{} instance>", obj.class.repr(store)),
+        }
     }
 }
 
