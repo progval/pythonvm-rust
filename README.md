@@ -7,6 +7,7 @@ A Python virtual machine, written in Rust.
 ## Features
 
 * prints strings to stdout
+* basic exceptions
 * useable as a library
 * a fine-grained sandbox
 
@@ -20,7 +21,7 @@ A Python virtual machine, written in Rust.
 
 ## Dependencies
 
-* CPython 3.4 (used as a parser and bytecode compiler). Versions newer than 3.4 should work, but their support is not tested.
+* CPython 3.6 (used as a parser and bytecode compiler). Older versions down to 3.4 should work, but their support is not tested.
 * [Rust](https://www.rust-lang.org/downloads.html)
 * [Cargo](https://crates.io/install)
 
