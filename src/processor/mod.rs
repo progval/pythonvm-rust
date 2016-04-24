@@ -82,27 +82,35 @@ macro_rules! pop_stack {
 
 macro_rules! unwind {
     ($call_stack: expr, $traceback: expr, $exception: expr, $exc_type: expr, $value: expr) => {{
-        let frame = $call_stack.last_mut().unwrap();
+        // Unwind call stack
         loop {
-            match frame.block_stack.pop() {
-                None => { // Root block; raise exception to calling function
-                    return PyResult::Raise($exception, $exc_type)
-                }
-                Some(Block::TryExcept(begin, end)) => { // Found a try…except block
-                    frame.block_stack.push(Block::TryExcept(begin, end)); // Push it back, it will be poped by PopExcept.
-                    frame.program_counter = end;
-                    let traceback = $traceback;
-                    let exception = $exception;
-                    frame.var_stack.push(traceback.clone()); // traceback
-                    frame.var_stack.push(exception.clone()); // exception
-                    frame.var_stack.push($exc_type); // exception type
+            match $call_stack.pop() {
+                None => panic!("Exception reached bottom of call stack."),
+                Some(mut frame) => {
+                    // Unwind block stack
+                    while let Some(block) = frame.block_stack.pop() {
+                        match block {
+                            Block::TryExcept(begin, end) => {
+                                // Found a try…except block
+                                frame.block_stack.push(Block::TryExcept(begin, end)); // Push it back, it will be poped by PopExcept.
+                                frame.program_counter = end;
+                                let traceback = $traceback;
+                                let exception = $exception;
+                                frame.var_stack.push(traceback.clone()); // traceback
+                                frame.var_stack.push(exception.clone()); // exception
+                                frame.var_stack.push($exc_type); // exception type
 
-                    frame.var_stack.push(traceback); // traceback
-                    frame.var_stack.push($value); // value
-                    frame.var_stack.push(exception); // exception
-                    break
-                }
-                Some(_) => { // Non-try…except block, exit it.
+                                frame.var_stack.push(traceback); // traceback
+                                frame.var_stack.push($value); // value
+                                frame.var_stack.push(exception); // exception
+
+                                $call_stack.push(frame);
+                                break
+                            }
+                            _ => { // Non-try…except block, exit it.
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -118,6 +126,10 @@ pub struct Processor<EP: EnvProxy> {
 }
 
 impl<EP: EnvProxy> Processor<EP> {
+    fn raise_runtime_error(&self, error: ProcessorError) {
+        // TODO: implement this
+        panic!(format!("Runtime Error: {:?}", error))
+    }
 
     // Load a name from the namespace
     fn load_name(&mut self, frame: &Frame, name: &String) -> PyResult {
@@ -173,15 +185,17 @@ impl<EP: EnvProxy> Processor<EP> {
     }
 
     // Call a primitive / function / code object, with arguments.
-    fn call_function(&mut self, call_stack: &mut Vec<Frame>, func_ref: &ObjectRef, mut args: Vec<ObjectRef>, kwargs: Vec<ObjectRef>) -> PyResult {
+    fn call_function(&mut self, call_stack: &mut Vec<Frame>, func_ref: &ObjectRef, mut args: Vec<ObjectRef>, kwargs: Vec<ObjectRef>) {
         // TODO: clone only if necessary
         match self.store.deref(func_ref).content.clone() {
             ObjectContent::Class(None) => {
-                PyResult::Return(self.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject)))
+                let frame = call_stack.last_mut().unwrap();
+                frame.var_stack.push(self.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject)))
             },
             ObjectContent::Class(Some(ref code_ref)) => {
                 // TODO: run code
-                PyResult::Return(self.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject)))
+                let frame = call_stack.last_mut().unwrap();
+                frame.var_stack.push(self.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject)))
             },
             ObjectContent::Function(ref func_module, ref code_ref) => {
                 let code = self.store.deref(code_ref).content.clone();
@@ -206,23 +220,31 @@ impl<EP: EnvProxy> Processor<EP> {
                     }
                     let new_frame = Frame::new(func_ref.clone(), locals.clone());
                     call_stack.push(new_frame);
-                    let res = self.run_code(call_stack, (*code).clone());
-                    call_stack.pop();
-                    res
                 }
                 else {
-                    return PyResult::Error(ProcessorError::NotACodeObject(func_ref.repr(&self.store)))
+                    let err = ProcessorError::NotACodeObject(func_ref.repr(&self.store));
+                    self.raise_runtime_error(err)
                 }
             },
             ObjectContent::PrimitiveFunction(ref name) => {
-                let function = match self.primitive_functions.get(name) {
-                    Some(function) => function.clone(),
-                    None => return PyResult::Error(ProcessorError::UnknownPrimitive(name.clone())),
-                };
-                function(self, args)
+                let function_opt = self.primitive_functions.get(name).map(|o| o.clone());
+                match function_opt {
+                    None => {
+                        let err = ProcessorError::UnknownPrimitive(name.clone());
+                        self.raise_runtime_error(err);
+                    },
+                    Some(function) => {
+                        let res = function(self, args); // Call the primitive
+                        match res {
+                            PyResult::Return(res) => call_stack.last_mut().unwrap().var_stack.push(res),
+                            PyResult::Raise(exc, exc_type) => unwind!(call_stack, self.primitive_objects.none.clone(), exc, exc_type, self.primitive_objects.none.clone()),
+                            PyResult::Error(err) => self.raise_runtime_error(err),
+                        };
+                    }
+                }
             },
             _ => {
-                return PyResult::Error(ProcessorError::NotAFunctionObject(format!("called {:?}", self.store.deref(func_ref))));
+                self.raise_runtime_error(ProcessorError::NotAFunctionObject(format!("called {:?}", self.store.deref(func_ref))));
             }
         }
     }
@@ -274,8 +296,9 @@ impl<EP: EnvProxy> Processor<EP> {
                     frame.var_stack.push(self.store.allocate(obj));
                 }
                 Instruction::ReturnValue => {
-                    let frame = call_stack.last_mut().unwrap();
-                    return PyResult::Return(pop_stack!(frame.var_stack))
+                    let frame = call_stack.pop().unwrap();
+                    let result = pop_stack!(frame.var_stack);
+                    call_stack.last_mut().unwrap().var_stack.push(result)
                 }
                 Instruction::PopBlock => {
                     let frame = call_stack.last_mut().unwrap();
@@ -401,14 +424,7 @@ impl<EP: EnvProxy> Processor<EP> {
                         args = py_unwrap!(frame.var_stack.pop_many(nb_args), ProcessorError::StackTooSmall);
                         func = pop_stack!(frame.var_stack);
                     }
-                    let ret = self.call_function(call_stack, &func, args, kwargs);
-                    match ret {
-                        PyResult::Return(obj_ref) => call_stack.last_mut().unwrap().var_stack.push(obj_ref),
-                        PyResult::Raise(exception, exc_type) => {
-                            unwind!(call_stack, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone())
-                        },
-                        PyResult::Error(err) => return PyResult::Error(err)
-                    };
+                    self.call_function(call_stack, &func, args, kwargs)
                 },
                 Instruction::MakeFunction(0, 0, 0) => {
                     // TODO: consume default arguments and annotations
