@@ -2,7 +2,7 @@ extern crate pythonvm;
 
 use std::path::PathBuf;
 use std::env;
-use pythonvm::{MockEnvProxy, run_file};
+use pythonvm::{MockEnvProxy, PyResult, run_file};
 
 #[test]
 fn test_hello_world() {
@@ -11,6 +11,11 @@ fn test_hello_world() {
     path.push(env::current_dir().unwrap());
     path.push("pythonlib/");
     let envproxy = MockEnvProxy::new(path);
-    let (processor, _result) = run_file(&mut reader, envproxy).unwrap();
-    assert_eq!(*processor.envproxy.stdout_content.lock().unwrap(), b"Hello world\n");
+    let (processor, result) = run_file(&mut reader, envproxy).unwrap();
+    if let PyResult::Return(_) = result {
+        assert_eq!(*processor.envproxy.stdout_content.lock().unwrap(), b"Hello world\n");
+    }
+    else {
+        panic!(format!("Exited with: {:?}", result))
+    }
 }

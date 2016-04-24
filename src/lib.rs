@@ -2,12 +2,13 @@ mod marshal;
 mod objects;
 mod processor;
 mod sandbox;
-mod stack;
+mod varstack;
 mod primitives;
 
 use std::fmt;
 use std::io;
-use processor::{PyResult, Processor};
+use std::collections::HashMap;
+pub use processor::{PyResult, Processor};
 
 pub use sandbox::{EnvProxy, RealEnvProxy, MockEnvProxy};
 
@@ -37,7 +38,7 @@ pub fn run_file<R: io::Read, EP: sandbox::EnvProxy>(reader: &mut R, envproxy: EP
     let mut store = objects::ObjectStore::new();
     let primitive_objects = objects::PrimitiveObjects::new(&mut store);
     let module = try!(marshal::read_object(reader, &mut store, &primitive_objects).map_err(InterpreterError::Unmarshal));
-    let mut processor = Processor { envproxy: envproxy, store: store, primitive_functions: primitives::get_default_primitives(), primitive_objects: primitive_objects };
+    let mut processor = Processor { envproxy: envproxy, store: store, primitive_functions: primitives::get_default_primitives(), primitive_objects: primitive_objects, modules: HashMap::new(), };
     let result = processor.run_code_object(module);
     Ok((processor, result))
 }

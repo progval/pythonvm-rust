@@ -57,7 +57,7 @@ fn build_class<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>
     let mut args_iter = args.into_iter();
     parse_first_arguments!("__primitives__.build_class", processor.store, args, args_iter,
         "func" "a function": {
-            ObjectContent::Function(ref code_arg) => {
+            ObjectContent::Function(_, ref code_arg) => {
                 code = code_arg.clone();
             },
         },

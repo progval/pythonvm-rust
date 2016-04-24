@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-pub trait Stack : Debug {
+pub trait VarStack : Debug {
     type Item;
 
     fn top(&self) -> Option<&Self::Item>;
@@ -11,17 +11,17 @@ pub trait Stack : Debug {
 }
 
 #[derive(Debug)]
-pub struct VectorStack<Item: Sized> {
+pub struct VectorVarStack<Item: Sized> {
     vector: Vec<Item>
 }
 
-impl<Item> VectorStack<Item> {
-    pub fn new() -> VectorStack<Item> {
-        VectorStack { vector: Vec::new() }
+impl<Item> VectorVarStack<Item> {
+    pub fn new() -> VectorVarStack<Item> {
+        VectorVarStack { vector: Vec::new() }
     }
 }
 
-impl<Item> Stack for VectorStack<Item> where Item: Debug {
+impl<Item> VarStack for VectorVarStack<Item> where Item: Debug {
     type Item = Item;
 
     fn top(&self) -> Option<&Self::Item> {

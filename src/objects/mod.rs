@@ -48,10 +48,11 @@ pub enum ObjectContent {
     Set(Vec<ObjectRef>),
     FrozenSet(Vec<ObjectRef>),
     Bytes(Vec<u8>),
-    Function(ObjectRef),
+    Function(String, ObjectRef), // module, code
     PrimitiveNamespace, // __primitives__
     PrimitiveFunction(String),
     Class(Option<ObjectRef>),
+    Module,
     OtherObject,
 }
 
@@ -114,10 +115,10 @@ impl ObjectRef {
             ObjectContent::Code(_) => "<code object>".to_string(),
             ObjectContent::Set(ref l) => format!("set({})", ObjectRef::repr_vec(l, store)),
             ObjectContent::FrozenSet(ref l) => format!("frozenset({})", ObjectRef::repr_vec(l, store)),
-            ObjectContent::Function(_) => {
+            ObjectContent::Function(ref module, ref _code) => {
                 match obj.name {
-                    None => "<anonymous function>".to_string(),
-                    Some(ref s) => format!("<function {}>", s),
+                    None => format!("<anonymous function in module {}>", module),
+                    Some(ref s) => format!("<function {} in module {}>", s, module),
                 }
             },
             ObjectContent::PrimitiveNamespace => "__primitives__".to_string(),
@@ -128,7 +129,23 @@ impl ObjectRef {
                     Some(ref s) => format!("<class {}>", s),
                 }
             },
+            ObjectContent::Module => {
+                match obj.name {
+                    None => "<anonymous module>".to_string(),
+                    Some(ref s) => format!("<module {}", s),
+                }
+            },
             ObjectContent::OtherObject => format!("<{} instance>", obj.class.repr(store)),
+        }
+    }
+
+    pub fn module(&self, store: &ObjectStore) -> String {
+        let func = store.deref(self);
+        let ref name = func.name;
+        match func.content {
+            ObjectContent::Function(ref module_name, ref _code) => module_name.clone(),
+            ObjectContent::Module => name.clone().unwrap(),
+            _ => panic!(format!("Not a function/module: {:?}", func)),
         }
     }
 }
@@ -203,6 +220,8 @@ pub struct PrimitiveObjects {
     pub baseexception: ObjectRef,
     pub runtimeerror: ObjectRef,
 
+    pub module: ObjectRef,
+
     pub names_map: HashMap<String, ObjectRef>,
 }
 
@@ -236,6 +255,8 @@ impl PrimitiveObjects {
         let baseexception = store.allocate(Object::new_class("BaseException".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let runtimeerror = store.allocate(Object::new_class("RuntimeError".to_string(), None, type_ref.clone(), vec![baseexception.clone()]));
 
+        let module = store.allocate(Object::new_class("module".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+
         let mut map = HashMap::new();
         map.insert("object".to_string(), obj_ref.clone());
         map.insert("tuple".to_string(), type_ref.clone());
@@ -255,6 +276,7 @@ impl PrimitiveObjects {
         map.insert("code".to_string(), code_type.clone());
         map.insert("BaseException".to_string(), baseexception.clone());
         map.insert("RuntimeError".to_string(), runtimeerror.clone());
+        map.insert("module".to_string(), module.clone());
 
         PrimitiveObjects {
             object: obj_ref, type_: type_ref,
@@ -265,6 +287,7 @@ impl PrimitiveObjects {
             bytes_type: bytes_type, str_type: str_type,
             function_type: function_type, code_type: code_type,
             baseexception: baseexception, runtimeerror: runtimeerror,
+            module: module,
             names_map: map,
         }
     }
@@ -292,5 +315,11 @@ impl PrimitiveObjects {
     }
     pub fn new_code(&self, c: Code) -> Object {
         Object::new_instance(None, self.code_type.clone(), ObjectContent::Code(Box::new(c)))
+    }
+    pub fn new_function(&self, name: String, module_name: String, code: ObjectRef) -> Object {
+        Object::new_instance(Some(name), self.function_type.clone(), ObjectContent::Function(module_name, code))
+    }
+    pub fn new_module(&self, name: String) -> Object {
+        Object::new_instance(Some(name), self.module.clone(), ObjectContent::Module)
     }
 }
