@@ -80,7 +80,7 @@ macro_rules! pop_stack {
     }
 }
 
-macro_rules! raise {
+macro_rules! unwind {
     ($call_stack: expr, $traceback: expr, $exception: expr, $exc_type: expr, $value: expr) => {{
         let frame = $call_stack.last_mut().unwrap();
         loop {
@@ -379,7 +379,7 @@ impl<EP: EnvProxy> Processor<EP> {
                 Instruction::RaiseVarargs(1) => {
                     let exception = pop_stack!(call_stack.last_mut().unwrap().var_stack);
                     let exc_type = exception.clone();
-                    raise!(call_stack, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone());
+                    unwind!(call_stack, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone());
                 }
                 Instruction::RaiseVarargs(2) => {
                     panic!("RaiseVarargs(2) not implemented.")
@@ -405,7 +405,7 @@ impl<EP: EnvProxy> Processor<EP> {
                     match ret {
                         PyResult::Return(obj_ref) => call_stack.last_mut().unwrap().var_stack.push(obj_ref),
                         PyResult::Raise(exception, exc_type) => {
-                            raise!(call_stack, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone())
+                            unwind!(call_stack, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone())
                         },
                         PyResult::Error(err) => return PyResult::Error(err)
                     };
