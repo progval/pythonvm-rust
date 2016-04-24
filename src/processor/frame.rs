@@ -16,6 +16,7 @@ pub struct Frame {
     pub var_stack: VectorVarStack<ObjectRef>,
     pub block_stack: Vec<Block>,
     pub locals: Rc<RefCell<HashMap<String, ObjectRef>>>,
+    pub program_counter: usize,
 }
 
 impl Frame {
@@ -25,6 +26,7 @@ impl Frame {
             var_stack: VectorVarStack::new(),
             block_stack: Vec::new(),
             locals: locals,
+            program_counter: 0,
         }
     }
 }

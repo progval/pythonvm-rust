@@ -39,7 +39,7 @@ pub fn run_file<R: io::Read, EP: sandbox::EnvProxy>(reader: &mut R, envproxy: EP
     let primitive_objects = objects::PrimitiveObjects::new(&mut store);
     let module = try!(marshal::read_object(reader, &mut store, &primitive_objects).map_err(InterpreterError::Unmarshal));
     let mut processor = Processor { envproxy: envproxy, store: store, primitive_functions: primitives::get_default_primitives(), primitive_objects: primitive_objects, modules: HashMap::new(), };
-    let result = processor.run_code_object(module);
+    let result = processor.call_main_code(module);
     Ok((processor, result))
 }
 

@@ -81,24 +81,25 @@ macro_rules! pop_stack {
 }
 
 macro_rules! raise {
-    ($frame: expr, $program_counter: ident, $traceback: expr, $exception: expr, $exc_type: expr, $value: expr) => {{
+    ($call_stack: expr, $traceback: expr, $exception: expr, $exc_type: expr, $value: expr) => {{
+        let frame = $call_stack.last_mut().unwrap();
         loop {
-            match $frame.block_stack.pop() {
+            match frame.block_stack.pop() {
                 None => { // Root block; raise exception to calling function
                     return PyResult::Raise($exception, $exc_type)
                 }
                 Some(Block::TryExcept(begin, end)) => { // Found a try…except block
-                    $frame.block_stack.push(Block::TryExcept(begin, end)); // Push it back, it will be poped by PopExcept.
-                    $program_counter = end;
+                    frame.block_stack.push(Block::TryExcept(begin, end)); // Push it back, it will be poped by PopExcept.
+                    frame.program_counter = end;
                     let traceback = $traceback;
                     let exception = $exception;
-                    $frame.var_stack.push(traceback.clone()); // traceback
-                    $frame.var_stack.push(exception.clone()); // exception
-                    $frame.var_stack.push($exc_type); // exception type
+                    frame.var_stack.push(traceback.clone()); // traceback
+                    frame.var_stack.push(exception.clone()); // exception
+                    frame.var_stack.push($exc_type); // exception type
 
-                    $frame.var_stack.push(traceback); // traceback
-                    $frame.var_stack.push($value); // value
-                    $frame.var_stack.push(exception); // exception
+                    frame.var_stack.push(traceback); // traceback
+                    frame.var_stack.push($value); // value
+                    frame.var_stack.push(exception); // exception
                     break
                 }
                 Some(_) => { // Non-try…except block, exit it.
@@ -231,10 +232,13 @@ impl<EP: EnvProxy> Processor<EP> {
     fn run_code(&mut self, call_stack: &mut Vec<Frame>, code: Code) -> PyResult {
         let bytecode: Vec<u8> = code.code;
         let instructions: Vec<Instruction> = instructions::InstructionDecoder::new(bytecode.iter()).into_iter().collect();
-        let mut program_counter = 0 as usize;
         loop {
-            let instruction = py_unwrap!(instructions.get(program_counter), ProcessorError::InvalidProgramCounter);
-            program_counter += 1;
+            let instruction = {
+                let frame = call_stack.last_mut().unwrap();
+                let instruction = py_unwrap!(instructions.get(frame.program_counter), ProcessorError::InvalidProgramCounter);
+                frame.program_counter += 1;
+                instruction
+            };
             match *instruction {
                 Instruction::PopTop => {
                     let frame = call_stack.last_mut().unwrap();
@@ -323,11 +327,11 @@ impl<EP: EnvProxy> Processor<EP> {
                 },
                 Instruction::SetupLoop(i) => {
                     let frame = call_stack.last_mut().unwrap();
-                    frame.block_stack.push(Block::Loop(program_counter, program_counter+i))
+                    frame.block_stack.push(Block::Loop(frame.program_counter, frame.program_counter+i))
                 }
                 Instruction::SetupExcept(i) => {
                     let frame = call_stack.last_mut().unwrap();
-                    frame.block_stack.push(Block::TryExcept(program_counter, program_counter+i))
+                    frame.block_stack.push(Block::TryExcept(frame.program_counter, frame.program_counter+i))
                 }
                 Instruction::CompareOp(CmpOperator::Eq) => {
                     let frame = call_stack.last_mut().unwrap();
@@ -350,7 +354,8 @@ impl<EP: EnvProxy> Processor<EP> {
                     frame.var_stack.push(py_try!(isinstance(self, vec![exc_ref, pattern_ref])));
                 }
                 Instruction::JumpForward(delta) => {
-                    program_counter += delta
+                    let frame = call_stack.last_mut().unwrap();
+                    frame.program_counter += delta
                 }
                 Instruction::LoadFast(i) => {
                     let frame = call_stack.last_mut().unwrap();
@@ -363,7 +368,7 @@ impl<EP: EnvProxy> Processor<EP> {
                     let obj = self.store.deref(&pop_stack!(frame.var_stack));
                     match obj.content {
                         ObjectContent::True => (),
-                        ObjectContent::False => program_counter = target,
+                        ObjectContent::False => frame.program_counter = target,
                         _ => unimplemented!(),
                     }
                 }
@@ -372,11 +377,9 @@ impl<EP: EnvProxy> Processor<EP> {
                     panic!("RaiseVarargs(0) not implemented.")
                 }
                 Instruction::RaiseVarargs(1) => {
-                    let frame = call_stack.last_mut().unwrap();
-                    let exception = pop_stack!(frame.var_stack);
+                    let exception = pop_stack!(call_stack.last_mut().unwrap().var_stack);
                     let exc_type = exception.clone();
-                    // TODO: add traceback
-                    raise!(frame, program_counter, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone());
+                    raise!(call_stack, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone());
                 }
                 Instruction::RaiseVarargs(2) => {
                     panic!("RaiseVarargs(2) not implemented.")
@@ -399,12 +402,10 @@ impl<EP: EnvProxy> Processor<EP> {
                         func = pop_stack!(frame.var_stack);
                     }
                     let ret = self.call_function(call_stack, &func, args, kwargs);
-                    let frame = call_stack.last_mut().unwrap();
                     match ret {
-                        PyResult::Return(obj_ref) => frame.var_stack.push(obj_ref),
+                        PyResult::Return(obj_ref) => call_stack.last_mut().unwrap().var_stack.push(obj_ref),
                         PyResult::Raise(exception, exc_type) => {
-                            // TODO: add frame to traceback
-                            raise!(frame, program_counter, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone())
+                            raise!(call_stack, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone())
                         },
                         PyResult::Error(err) => return PyResult::Error(err)
                     };
@@ -425,42 +426,48 @@ impl<EP: EnvProxy> Processor<EP> {
         };
     }
 
-    /// Load a module from its name and run it.
-    /// Functions and attributes will be added in the `namespace`.
-    pub fn call_module(&mut self, call_stack: &mut Vec<Frame>, module_name: String) -> PyResult {
-        let mut builtins_bytecode = self.envproxy.open_module(module_name.clone());
-        let mut buf = [0; 12];
-        builtins_bytecode.read_exact(&mut buf).unwrap();
-        if !marshal::check_magic(&buf[0..4]) {
-            panic!("Bad magic number for builtins.py.")
-        }
-        let builtins_code = py_try!(marshal::read_object(&mut builtins_bytecode, &mut self.store, &self.primitive_objects), ProcessorError::UnmarshalError);
-        let builtins_code = match self.store.deref(&builtins_code).content {
-            ObjectContent::Code(ref code) => code.clone(),
-            ref o => return PyResult::Error(ProcessorError::NotACodeObject(format!("builtins code {:?}", o))),
+    fn call_module_code(&mut self, call_stack: &mut Vec<Frame>, module_name: String, module_ref: ObjectRef) -> PyResult {
+        let code_ref = match self.store.deref(&module_ref).content {
+            ObjectContent::Module(ref code_ref) => code_ref.clone(),
+            ref o => panic!("Not a module: {:?}", o),
         };
-        let module_ref = self.store.allocate(self.primitive_objects.new_module(module_name.clone()));
+        let code = match self.store.deref(&code_ref).content {
+            ObjectContent::Code(ref code) => code.clone(),
+            ref o => return PyResult::Error(ProcessorError::NotACodeObject(format!("file code {:?}", o))),
+        };
+        let module_obj = self.store.allocate(self.primitive_objects.new_module(module_name.clone(), code_ref));
         self.modules.insert(module_name.clone(), Rc::new(RefCell::new(HashMap::new())));
-        let locals = self.modules.get(&module_name).unwrap().clone();
-        let frame = Frame::new(module_ref, locals);
-        call_stack.push(frame);
-        let res = self.run_code(call_stack, *builtins_code);
+        let mut call_stack = vec![Frame::new(module_obj, self.modules.get(&module_name).unwrap().clone())];
+        let res = self.run_code(&mut call_stack, *code);
         let frame = call_stack.pop().unwrap();
         res // Do not raise exceptions before the pop()
     }
 
-    /// Entry point to run code. Loads builtins in the code's namespace and then run it.
-    pub fn run_code_object(&mut self, code_object: ObjectRef) -> PyResult {
-        let mut call_stack = Vec::new();
-        py_try!(self.call_module(&mut call_stack, "builtins".to_string()));
-
-        let code = match self.store.deref(&code_object).content {
+    /// Get the code of a module from its name
+    pub fn get_module_code(&mut self, call_stack: &mut Vec<Frame>, module_name: String) -> PyResult {
+        // Load the code
+        let mut module_bytecode = self.envproxy.open_module(module_name.clone());
+        let mut buf = [0; 12];
+        module_bytecode.read_exact(&mut buf).unwrap();
+        if !marshal::check_magic(&buf[0..4]) {
+            panic!(format!("Bad magic number for module {}.", module_name))
+        }
+        let module_code_ref = py_try!(marshal::read_object(&mut module_bytecode, &mut self.store, &self.primitive_objects), ProcessorError::UnmarshalError);
+        let module_code = match self.store.deref(&module_code_ref).content {
             ObjectContent::Code(ref code) => code.clone(),
-            ref o => return PyResult::Error(ProcessorError::NotACodeObject(format!("file code {:?}", o))),
+            ref o => return PyResult::Error(ProcessorError::NotACodeObject(format!("module code {:?}", o))),
         };
-        let module_obj = self.store.allocate(self.primitive_objects.new_module("__main__".to_string()));
-        self.modules.insert("__main__".to_string(), Rc::new(RefCell::new(HashMap::new())));
-        let mut call_stack = vec![Frame::new(module_obj, self.modules.get("__main__").unwrap().clone())];
-        self.run_code(&mut call_stack, *code)
+        PyResult::Return(self.store.allocate(self.primitive_objects.new_module(module_name.clone(), module_code_ref)))
+    }
+
+    /// Entry point to run code. Loads builtins in the code's namespace and then run it.
+    pub fn call_main_code(&mut self, code_ref: ObjectRef) -> PyResult {
+        let mut call_stack = Vec::new();
+        let builtins_code_ref = py_try!(self.get_module_code(&mut call_stack, "builtins".to_string()));
+        py_try!(self.call_module_code(&mut call_stack, "builtins".to_string(), builtins_code_ref));
+
+        let mut call_stack = Vec::new();
+        let module_ref = self.store.allocate(self.primitive_objects.new_module("__main__".to_string(), code_ref));
+        self.call_module_code(&mut call_stack, "__main__".to_string(), module_ref)
     }
 }

@@ -49,10 +49,10 @@ pub enum ObjectContent {
     FrozenSet(Vec<ObjectRef>),
     Bytes(Vec<u8>),
     Function(String, ObjectRef), // module, code
+    Module(ObjectRef),
     PrimitiveNamespace, // __primitives__
     PrimitiveFunction(String),
     Class(Option<ObjectRef>),
-    Module,
     OtherObject,
 }
 
@@ -129,7 +129,7 @@ impl ObjectRef {
                     Some(ref s) => format!("<class {}>", s),
                 }
             },
-            ObjectContent::Module => {
+            ObjectContent::Module(ref _code) => {
                 match obj.name {
                     None => "<anonymous module>".to_string(),
                     Some(ref s) => format!("<module {}", s),
@@ -144,7 +144,7 @@ impl ObjectRef {
         let ref name = func.name;
         match func.content {
             ObjectContent::Function(ref module_name, ref _code) => module_name.clone(),
-            ObjectContent::Module => name.clone().unwrap(),
+            ObjectContent::Module(ref _code) => name.clone().unwrap(),
             _ => panic!(format!("Not a function/module: {:?}", func)),
         }
     }
@@ -319,7 +319,7 @@ impl PrimitiveObjects {
     pub fn new_function(&self, name: String, module_name: String, code: ObjectRef) -> Object {
         Object::new_instance(Some(name), self.function_type.clone(), ObjectContent::Function(module_name, code))
     }
-    pub fn new_module(&self, name: String) -> Object {
-        Object::new_instance(Some(name), self.module.clone(), ObjectContent::Module)
+    pub fn new_module(&self, name: String, code: ObjectRef) -> Object {
+        Object::new_instance(Some(name), self.module.clone(), ObjectContent::Module(code))
     }
 }
