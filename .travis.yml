@@ -4,8 +4,8 @@ rust:
   - beta
   - nightly
 before_script:
-  - wget https://hg.python.org/cpython/archive/tip.tar.bz2
-  - tar -xf tip.tar.bz2
+  - wget https://hg.python.org/cpython/archive/default.tar.bz2
+  - tar -xf default.tar.bz2
   - cd cpython-*
   - ./configure --prefix=$HOME/.local/
   - make -j 2
