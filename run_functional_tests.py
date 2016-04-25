@@ -16,6 +16,7 @@ subprocess.check_call([sys.executable, '-m', 'compileall', '-b', TESTS_DIR],
 all_ok = True
 
 for filename in glob.glob(TESTS_DIR + os.path.sep + '*.py'):
+    print('Running test: {}'.format(filename))
     vm_result = subprocess.check_output([BIN, LIB_DIR, filename + 'c'], universal_newlines=True)
     system_python_result = subprocess.check_output([sys.executable, filename], universal_newlines=True)
     if vm_result != system_python_result:
