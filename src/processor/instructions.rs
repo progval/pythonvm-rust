@@ -1,5 +1,6 @@
 #[derive(PartialEq)]
 #[derive(Debug)]
+#[derive(Clone)]
 pub enum CmpOperator {
     Lt,  // Lower than
     Leq, // Lower or equal
@@ -35,6 +36,7 @@ impl CmpOperator {
 
 #[derive(PartialEq)]
 #[derive(Debug)]
+#[derive(Clone)]
 pub enum Instruction {
     PopTop,
     DupTop,
