@@ -80,41 +80,38 @@ macro_rules! pop_stack {
     }
 }
 
-macro_rules! unwind {
-    ($call_stack: expr, $traceback: expr, $exception: expr, $exc_type: expr, $value: expr) => {{
-        // Unwind call stack
-        'outer: loop {
-            match $call_stack.pop() {
-                None => panic!("Exception reached bottom of call stack."),
-                Some(mut frame) => {
-                    // Unwind block stack
-                    while let Some(block) = frame.block_stack.pop() {
-                        match block {
-                            Block::TryExcept(begin, end) => {
-                                // Found a try…except block
-                                frame.block_stack.push(Block::TryExcept(begin, end)); // Push it back, it will be poped by PopExcept.
-                                frame.program_counter = end;
-                                let traceback = $traceback;
-                                let exception = $exception;
-                                frame.var_stack.push(traceback.clone()); // traceback
-                                frame.var_stack.push(exception.clone()); // exception
-                                frame.var_stack.push($exc_type); // exception type
+/// Unwind call stack until a try…except is found.
+fn unwind(call_stack: &mut Vec<Frame>, traceback: ObjectRef, exception: ObjectRef, value: ObjectRef) {
+    let exc_type = exception.clone(); // Looks like that's how CPython does things…
+    'outer: loop {
+        match call_stack.pop() {
+            None => panic!("Exception reached bottom of call stack."),
+            Some(mut frame) => {
+                // Unwind block stack
+                while let Some(block) = frame.block_stack.pop() {
+                    match block {
+                        Block::TryExcept(begin, end) => {
+                            // Found a try…except block
+                            frame.block_stack.push(Block::TryExcept(begin, end)); // Push it back, it will be poped by PopExcept.
+                            frame.program_counter = end;
+                            frame.var_stack.push(traceback.clone());
+                            frame.var_stack.push(value.clone());
+                            frame.var_stack.push(exc_type);
 
-                                frame.var_stack.push(traceback); // traceback
-                                frame.var_stack.push($value); // value
-                                frame.var_stack.push(exception); // exception
+                            frame.var_stack.push(traceback);
+                            frame.var_stack.push(value);
+                            frame.var_stack.push(exception);
 
-                                $call_stack.push(frame);
-                                break 'outer
-                            }
-                            _ => { // Non-try…except block, exit it.
-                            }
+                            call_stack.push(frame);
+                            break 'outer
+                        }
+                        _ => { // Non-try…except block, exit it.
                         }
                     }
                 }
             }
         }
-    }}
+    }
 }
 
 pub struct Processor<EP: EnvProxy> {
@@ -237,7 +234,7 @@ impl<EP: EnvProxy> Processor<EP> {
                         let res = function(self, args); // Call the primitive
                         match res {
                             PyResult::Return(res) => call_stack.last_mut().unwrap().var_stack.push(res),
-                            PyResult::Raise(exc, exc_type) => unwind!(call_stack, self.primitive_objects.none.clone(), exc, exc_type, self.primitive_objects.none.clone()),
+                            PyResult::Raise(exc, value) => unwind(call_stack, self.primitive_objects.none.clone(), exc, value),
                             PyResult::Error(err) => self.raise_runtime_error(err),
                         };
                     }
@@ -306,13 +303,27 @@ impl<EP: EnvProxy> Processor<EP> {
                     pop_stack!(frame.block_stack);
                 }
                 Instruction::EndFinally => {
-                    let frame = call_stack.last_mut().unwrap();
-                    let status_ref = pop_stack!(frame.var_stack);
+                    let status_ref = {
+                        let frame = call_stack.last_mut().unwrap();
+                        pop_stack!(frame.var_stack)
+                    };
                     let status = self.store.deref(&status_ref);
                     match status.content {
                         ObjectContent::Int(i) => panic!("TODO: finally int status"), // TODO
-                        ObjectContent::OtherObject => {}
-                        _ => panic!("Invalid finally status")
+                        ObjectContent::OtherObject => {
+                            let (val, traceback) = {
+                                let frame = call_stack.last_mut().unwrap();
+                                let val = pop_stack!(frame.var_stack); // Note: CPython calls this variable “exc”
+                                let traceback = pop_stack!(frame.var_stack);
+                                (val, traceback)
+                            };
+                            let exc = status_ref;
+                            call_stack.last_mut().unwrap().block_stack.pop().unwrap(); // Remove this try…except block
+                            unwind(call_stack, traceback, exc, val);
+                        }
+                        ObjectContent::None => {
+                        }
+                        _ => panic!(format!("Invalid finally status: {:?}", status))
                     }
                 }
                 Instruction::PopExcept => {
@@ -402,8 +413,7 @@ impl<EP: EnvProxy> Processor<EP> {
                 }
                 Instruction::RaiseVarargs(1) => {
                     let exception = pop_stack!(call_stack.last_mut().unwrap().var_stack);
-                    let exc_type = exception.clone();
-                    unwind!(call_stack, self.primitive_objects.none.clone(), exception, exc_type, self.primitive_objects.none.clone());
+                    unwind(call_stack, self.primitive_objects.none.clone(), exception, self.primitive_objects.none.clone());
                 }
                 Instruction::RaiseVarargs(2) => {
                     panic!("RaiseVarargs(2) not implemented.")

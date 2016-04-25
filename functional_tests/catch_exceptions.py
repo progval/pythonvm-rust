@@ -51,3 +51,15 @@ else:
     print('not raised')
 
 print('----')
+
+try:
+    try:
+        raise Bar()
+    except Foo:
+        print('raised Foo')
+except Bar:
+    print('raised Bar')
+else:
+    print('not raised')
+
+print('----')
