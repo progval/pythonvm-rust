@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::collections::linked_list::LinkedList;
 use super::sandbox::EnvProxy;
-use super::processor::{Processor, ProcessorError, PyResult, PyFunction};
+use super::state::{State, PyResult, PyFunction};
 use super::objects::{ObjectRef, ObjectContent, Object};
 
 macro_rules! parse_first_arguments {
@@ -31,7 +31,7 @@ macro_rules! parse_arguments {
     }};
 }
 
-fn write_stdout<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> PyResult {
+fn write_stdout<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) -> PyResult {
     parse_arguments!("__primitives__.write_stdout", processor.store, args,
         "value" "a string, boolean, or integer": {
             ObjectContent::String(ref s) => {
@@ -51,7 +51,7 @@ fn write_stdout<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef
     PyResult::Return(processor.primitive_objects.none.clone())
 }
 
-fn build_class<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> PyResult {
+fn build_class<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) -> PyResult {
     let name;
     let code;
     let mut args_iter = args.into_iter();
@@ -75,7 +75,7 @@ fn build_class<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>
     PyResult::Return(processor.store.allocate(Object::new_class(name, Some(code), processor.primitive_objects.type_.clone(), bases)))
 }
 
-fn issubclass<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>) -> PyResult {
+fn issubclass<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) -> PyResult {
     if args.len() != 2 {
         panic!(format!("__primitives__.issubclass takes 2 arguments, not {}", args.len()))
     }
@@ -104,7 +104,7 @@ fn issubclass<EP: EnvProxy>(processor: &mut Processor<EP>, args: Vec<ObjectRef>)
     PyResult::Return(processor.primitive_objects.false_obj.clone())
 }
 
-fn isinstance<EP: EnvProxy>(processor: &mut Processor<EP>, mut args: Vec<ObjectRef>) -> PyResult {
+fn isinstance<EP: EnvProxy>(processor: &mut State<EP>, mut args: Vec<ObjectRef>) -> PyResult {
     if args.len() != 2 {
         panic!(format!("__primitives__.isinstance takes 2 arguments, not {}", args.len()))
     }

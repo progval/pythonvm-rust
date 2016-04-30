@@ -217,10 +217,18 @@ pub struct PrimitiveObjects {
     pub function_type: ObjectRef,
     pub code_type: ObjectRef,
 
-    pub baseexception: ObjectRef,
-    pub runtimeerror: ObjectRef,
-
     pub module: ObjectRef,
+
+    pub baseexception: ObjectRef,
+    pub processorerror: ObjectRef,
+    pub exception: ObjectRef,
+
+    pub nameerror: ObjectRef,
+    pub attributeerror: ObjectRef,
+    pub typeerror: ObjectRef,
+
+    pub lookuperror: ObjectRef,
+    pub keyerror: ObjectRef,
 
     pub names_map: HashMap<String, ObjectRef>,
 }
@@ -252,10 +260,19 @@ impl PrimitiveObjects {
         let function_type = store.allocate(Object::new_class("function".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let code_type = store.allocate(Object::new_class("code".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
 
-        let baseexception = store.allocate(Object::new_class("BaseException".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
-        let runtimeerror = store.allocate(Object::new_class("RuntimeError".to_string(), None, type_ref.clone(), vec![baseexception.clone()]));
-
         let module = store.allocate(Object::new_class("module".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+
+        let baseexception = store.allocate(Object::new_class("BaseException".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let processorerror = store.allocate(Object::new_class("ProcessorError".to_string(), None, type_ref.clone(), vec![baseexception.clone()]));
+        let exception = store.allocate(Object::new_class("Exception".to_string(), None, type_ref.clone(), vec![baseexception.clone()]));
+
+        let nameerror = store.allocate(Object::new_class("NameError".to_string(), None, type_ref.clone(), vec![exception.clone()]));
+        let attributeerror = store.allocate(Object::new_class("AttributeError".to_string(), None, type_ref.clone(), vec![exception.clone()]));
+        let typeerror = store.allocate(Object::new_class("TypeError".to_string(), None, type_ref.clone(), vec![exception.clone()]));
+
+        let lookuperror = store.allocate(Object::new_class("LookupError".to_string(), None, type_ref.clone(), vec![exception.clone()]));
+        let keyerror = store.allocate(Object::new_class("KeyError".to_string(), None, type_ref.clone(), vec![lookuperror.clone()]));
+
 
         let mut map = HashMap::new();
         map.insert("object".to_string(), obj_ref.clone());
@@ -274,9 +291,19 @@ impl PrimitiveObjects {
         map.insert("str".to_string(), str_type.clone());
         map.insert("function".to_string(), function_type.clone());
         map.insert("code".to_string(), code_type.clone());
-        map.insert("BaseException".to_string(), baseexception.clone());
-        map.insert("RuntimeError".to_string(), runtimeerror.clone());
         map.insert("module".to_string(), module.clone());
+
+        // Base classes
+        map.insert("BaseException".to_string(), baseexception.clone());
+        map.insert("ProcessorError".to_string(), processorerror.clone());
+        map.insert("Exception".to_string(), exception.clone());
+
+        map.insert("NameError".to_string(), nameerror.clone());
+        map.insert("AttributeError".to_string(), attributeerror.clone());
+        map.insert("TypeError".to_string(), typeerror.clone());
+
+        map.insert("LookupError".to_string(), lookuperror.clone());
+        map.insert("KeyError".to_string(), keyerror.clone());
 
         PrimitiveObjects {
             object: obj_ref, type_: type_ref,
@@ -286,7 +313,9 @@ impl PrimitiveObjects {
             set_type: set_type, frozenset_type: frozenset_type,
             bytes_type: bytes_type, str_type: str_type,
             function_type: function_type, code_type: code_type,
-            baseexception: baseexception, runtimeerror: runtimeerror,
+            baseexception: baseexception, processorerror: processorerror, exception: exception,
+            nameerror: nameerror, attributeerror: attributeerror, typeerror: typeerror,
+            lookuperror: lookuperror, keyerror: keyerror,
             module: module,
             names_map: map,
         }
