@@ -60,6 +60,7 @@ pub enum Instruction {
     JumpAbsolute(usize),
     PopJumpIfFalse(usize),
     LoadFast(usize),
+    StoreFast(usize),
     LoadGlobal(usize),
     CallFunction(usize, usize), // nb_args, nb_kwargs
     RaiseVarargs(u16),
@@ -130,6 +131,7 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
                 120 => Instruction::SetupLoop(self.read_argument() as usize + 2),
                 121 => Instruction::SetupExcept(self.read_argument() as usize + 2),
                 124 => Instruction::LoadFast(self.read_argument() as usize),
+                125 => Instruction::StoreFast(self.read_argument() as usize),
                 130 => Instruction::RaiseVarargs(self.read_argument() as u16),
                 131 => Instruction::CallFunction(self.read_byte() as usize, self.read_byte() as usize),
                 132 => {

@@ -21,6 +21,12 @@ impl<Item> VectorVarStack<Item> {
     }
 }
 
+impl<Item> VectorVarStack<Item> {
+    pub fn iter(&self) -> ::std::slice::Iter<Item> {
+        self.vector.iter()
+    }
+}
+
 impl<Item> VarStack for VectorVarStack<Item> where Item: Debug {
     type Item = Item;
 

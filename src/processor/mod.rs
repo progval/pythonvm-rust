@@ -198,7 +198,13 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
         let instruction = {
             let frame = call_stack.last_mut().unwrap();
             let instruction = py_unwrap!(state, frame.instructions.get(frame.program_counter), ProcessorError::InvalidProgramCounter);
-            //println!("{} {:?}", frame.program_counter, instruction); // Useful for debugging
+            // Useful for debugging:
+            /*println!("");
+            for r in frame.var_stack.iter() {
+                println!("{}", r.repr(&state.store));
+            }
+            println!("{} {:?}", frame.program_counter, instruction);
+            */
             frame.program_counter += 1;
             instruction.clone()
         };
@@ -413,6 +419,11 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 let name = py_unwrap!(state, frame.code.varnames.get(i), ProcessorError::InvalidVarnameIndex).clone();
                 let obj_ref = py_unwrap!(state, frame.locals.borrow().get(&name), ProcessorError::InvalidName(name)).clone();
                 frame.var_stack.push(obj_ref)
+            }
+            Instruction::StoreFast(i) => {
+                let frame = call_stack.last_mut().unwrap();
+                let name = py_unwrap!(state, frame.code.varnames.get(i), ProcessorError::InvalidVarnameIndex).clone();
+                frame.locals.borrow_mut().insert(name, pop_stack!(state, frame.var_stack));
             }
             Instruction::PopJumpIfFalse(target) => {
                 let frame = call_stack.last_mut().unwrap();
