@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use std::fmt;
 use self::itertools::Itertools;
+use super::state::State;
+use super::sandbox::EnvProxy;
 
 #[derive(Debug)]
 #[derive(Clone)]
@@ -53,12 +55,16 @@ pub enum ObjectContent {
     PrimitiveNamespace, // __primitives__
     PrimitiveFunction(String),
     Class(Option<ObjectRef>),
+    RandomAccessIterator(ObjectRef, usize, u64), // container, index, container version
     OtherObject,
 }
+
+static CURRENT_VERSION: AtomicUsize = ATOMIC_USIZE_INIT;
 
 #[derive(Debug)]
 #[derive(Clone)]
 pub struct Object {
+    pub version: u64,
     pub name: Option<String>,
     pub content: ObjectContent,
     pub class: ObjectRef,
@@ -66,12 +72,27 @@ pub struct Object {
 }
 
 impl Object {
+    fn new_version() -> u64 {
+        CURRENT_VERSION.fetch_add(1, Ordering::SeqCst) as u64 // TODO: avoid cast
+    }
     pub fn new_instance(name: Option<String>, class: ObjectRef, content: ObjectContent) -> Object {
-        Object { name: name, content: content, class: class, bases: None }
+        Object {
+            version: Object::new_version(),
+            name: name,
+            content: content,
+            class: class,
+            bases: None,
+        }
     }
 
     pub fn new_class(name: String, code: Option<ObjectRef>, metaclass: ObjectRef, bases: Vec<ObjectRef>) -> Object {
-        Object { name: Some(name), content: ObjectContent::Class(code), class: metaclass, bases: Some(bases) }
+        Object {
+            version: Object::new_version(),
+            name: Some(name),
+            content: ObjectContent::Class(code),
+            class: metaclass,
+            bases: Some(bases),
+        }
     }
 }
 
@@ -135,6 +156,9 @@ impl ObjectRef {
                     Some(ref s) => format!("<module {}", s),
                 }
             },
+            ObjectContent::RandomAccessIterator(ref container, ref index, ref version) => {
+                format!("<iterator on {} at index {}>", store.deref(container).class.repr(store), version)
+            }
             ObjectContent::OtherObject => format!("<{} instance>", obj.class.repr(store)),
         }
     }
@@ -147,6 +171,13 @@ impl ObjectRef {
             ObjectContent::Module(ref _code) => name.clone().unwrap(),
             _ => panic!(format!("Not a function/module: {:?}", func)),
         }
+    }
+
+    pub fn iter<EP: EnvProxy>(&self, state: &mut State<EP>) -> ObjectRef {
+        // TODO: check it's a list or a tuple
+        let obj_version = state.store.deref(self).version;
+        let iterator = Object::new_instance(None, state.primitive_objects.iterator_type.clone(), ObjectContent::RandomAccessIterator(self.clone(), 0, obj_version));
+        state.store.allocate(iterator)
     }
 }
 
@@ -214,6 +245,8 @@ pub struct PrimitiveObjects {
     pub bytes_type: ObjectRef,
     pub str_type: ObjectRef,
 
+    pub iterator_type: ObjectRef,
+
     pub function_type: ObjectRef,
     pub code_type: ObjectRef,
 
@@ -226,6 +259,7 @@ pub struct PrimitiveObjects {
     pub nameerror: ObjectRef,
     pub attributeerror: ObjectRef,
     pub typeerror: ObjectRef,
+    pub stopiteration: ObjectRef,
 
     pub lookuperror: ObjectRef,
     pub keyerror: ObjectRef,
@@ -237,8 +271,20 @@ impl PrimitiveObjects {
     pub fn new(store: &mut ObjectStore) -> PrimitiveObjects {
         let obj_ref = ObjectRef::new();
         let type_ref = ObjectRef::new();
-        let obj = Object { name: Some("object".to_string()), content: ObjectContent::OtherObject, bases: Some(vec![]), class: type_ref.clone() };
-        let type_ = Object { name: Some("type".to_string()), content: ObjectContent::OtherObject, bases: Some(vec![obj_ref.clone()]), class: type_ref.clone() };
+        let obj = Object {
+            version: Object::new_version(),
+            name: Some("object".to_string()),
+            content: ObjectContent::OtherObject,
+            bases: Some(vec![]),
+            class: type_ref.clone()
+        };
+        let type_ = Object {
+            version: Object::new_version(),
+            name: Some("type".to_string()),
+            content: ObjectContent::OtherObject,
+            bases: Some(vec![obj_ref.clone()]),
+            class: type_ref.clone()
+        };
         store.allocate_at(obj_ref.clone(), obj);
         store.allocate_at(type_ref.clone(), type_);
 
@@ -256,6 +302,7 @@ impl PrimitiveObjects {
         let frozenset_type = store.allocate(Object::new_class("frozenset".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let bytes_type = store.allocate(Object::new_class("bytes".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let str_type = store.allocate(Object::new_class("str".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let iterator_type = store.allocate(Object::new_class("iterator".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
 
         let function_type = store.allocate(Object::new_class("function".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let code_type = store.allocate(Object::new_class("code".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
@@ -269,6 +316,7 @@ impl PrimitiveObjects {
         let nameerror = store.allocate(Object::new_class("NameError".to_string(), None, type_ref.clone(), vec![exception.clone()]));
         let attributeerror = store.allocate(Object::new_class("AttributeError".to_string(), None, type_ref.clone(), vec![exception.clone()]));
         let typeerror = store.allocate(Object::new_class("TypeError".to_string(), None, type_ref.clone(), vec![exception.clone()]));
+        let stopiteration = store.allocate(Object::new_class("StopIteration".to_string(), None, type_ref.clone(), vec![exception.clone()]));
 
         let lookuperror = store.allocate(Object::new_class("LookupError".to_string(), None, type_ref.clone(), vec![exception.clone()]));
         let keyerror = store.allocate(Object::new_class("KeyError".to_string(), None, type_ref.clone(), vec![lookuperror.clone()]));
@@ -301,6 +349,7 @@ impl PrimitiveObjects {
         map.insert("NameError".to_string(), nameerror.clone());
         map.insert("AttributeError".to_string(), attributeerror.clone());
         map.insert("TypeError".to_string(), typeerror.clone());
+        map.insert("StopIteration".to_string(), stopiteration.clone());
 
         map.insert("LookupError".to_string(), lookuperror.clone());
         map.insert("KeyError".to_string(), keyerror.clone());
@@ -312,9 +361,10 @@ impl PrimitiveObjects {
             tuple_type: tuple_type, list_type: list_type,
             set_type: set_type, frozenset_type: frozenset_type,
             bytes_type: bytes_type, str_type: str_type,
+            iterator_type: iterator_type,
             function_type: function_type, code_type: code_type,
             baseexception: baseexception, processorerror: processorerror, exception: exception,
-            nameerror: nameerror, attributeerror: attributeerror, typeerror: typeerror,
+            nameerror: nameerror, attributeerror: attributeerror, typeerror: typeerror, stopiteration: stopiteration,
             lookuperror: lookuperror, keyerror: keyerror,
             module: module,
             names_map: map,

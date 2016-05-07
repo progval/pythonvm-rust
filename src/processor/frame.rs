@@ -9,6 +9,7 @@ use super::instructions::{Instruction, InstructionDecoder};
 pub enum Block {
     Loop(usize, usize), // begin, end
     TryExcept(usize, usize), // begin, end
+    ExceptPopGoto(ObjectRef, usize, usize), // If an exception matchs the first arg matches, pop n elements from the stack and set the PC to the second arg
 }
 
 #[derive(Debug)]

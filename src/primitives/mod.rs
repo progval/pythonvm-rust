@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::collections::linked_list::LinkedList;
 use super::sandbox::EnvProxy;
-use super::state::{State, PyResult, PyFunction};
-use super::objects::{ObjectRef, ObjectContent, Object};
+use super::state::{State, PyResult, PyFunction, raise, return_value};
+use super::objects::{ObjectRef, ObjectContent, Object, ObjectStore};
+use super::processor::frame::Frame;
 
 macro_rules! parse_first_arguments {
     ( $funcname:expr, $store:expr, $args:ident, $args_iter:ident, $( $argname:tt $argexpected:tt : { $($argpattern:pat => $argcode:block,)* } ),* ) => {{
@@ -31,7 +32,7 @@ macro_rules! parse_arguments {
     }};
 }
 
-fn write_stdout<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) -> PyResult {
+fn write_stdout<EP: EnvProxy>(processor: &mut State<EP>, call_stack: &mut Vec<Frame>, args: Vec<ObjectRef>) {
     parse_arguments!("__primitives__.write_stdout", processor.store, args,
         "value" "a string, boolean, or integer": {
             ObjectContent::String(ref s) => {
@@ -48,10 +49,10 @@ fn write_stdout<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) -
             },
         }
     );
-    PyResult::Return(processor.primitive_objects.none.clone())
+    return_value(call_stack, processor.primitive_objects.none.clone())
 }
 
-fn build_class<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) -> PyResult {
+fn build_class<EP: EnvProxy>(processor: &mut State<EP>, call_stack: &mut Vec<Frame>, args: Vec<ObjectRef>) {
     let name;
     let code;
     let mut args_iter = args.into_iter();
@@ -72,15 +73,10 @@ fn build_class<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) ->
     else {
         bases
     };
-    PyResult::Return(processor.store.allocate(Object::new_class(name, Some(code), processor.primitive_objects.type_.clone(), bases)))
+    return_value(call_stack, processor.store.allocate(Object::new_class(name, Some(code), processor.primitive_objects.type_.clone(), bases)))
 }
 
-fn issubclass<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) -> PyResult {
-    if args.len() != 2 {
-        panic!(format!("__primitives__.issubclass takes 2 arguments, not {}", args.len()))
-    }
-    let first = args.get(0).unwrap();
-    let second = args.get(1).unwrap();
+pub fn native_issubclass(store: &ObjectStore, first: &ObjectRef, second: &ObjectRef) -> bool {
     let mut visited = HashSet::new();
     let mut to_visit = LinkedList::new();
     to_visit.push_back(first.clone());
@@ -90,9 +86,9 @@ fn issubclass<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) -> 
             continue
         };
         if candidate.is(second) {
-            return PyResult::Return(processor.primitive_objects.true_obj.clone())
+            return true
         };
-        match processor.store.deref(&candidate).bases {
+        match store.deref(&candidate).bases {
             None => (),
             Some(ref bases) => {
                 for base in bases.iter() {
@@ -101,17 +97,81 @@ fn issubclass<EP: EnvProxy>(processor: &mut State<EP>, args: Vec<ObjectRef>) -> 
             }
         };
     }
-    PyResult::Return(processor.primitive_objects.false_obj.clone())
+    false
 }
 
-fn isinstance<EP: EnvProxy>(processor: &mut State<EP>, mut args: Vec<ObjectRef>) -> PyResult {
+fn issubclass<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, args: Vec<ObjectRef>) {
+    if args.len() != 2 {
+        panic!(format!("__primitives__.issubclass takes 2 arguments, not {}", args.len()))
+    }
+    let first = args.get(0).unwrap();
+    let second = args.get(1).unwrap();
+    let res = native_issubclass(&state.store, first, second);
+    if res {
+        return_value(call_stack, state.primitive_objects.true_obj.clone())
+    }
+    else {
+        return_value(call_stack, state.primitive_objects.false_obj.clone())
+    }
+}
+
+pub fn native_isinstance(store: &ObjectStore, first: &ObjectRef, second: &ObjectRef) -> bool {
+    native_issubclass(store, &store.deref(&first).class, second)
+}
+
+fn isinstance<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, mut args: Vec<ObjectRef>) {
     if args.len() != 2 {
         panic!(format!("__primitives__.isinstance takes 2 arguments, not {}", args.len()))
     }
     let second = args.pop().unwrap();
     let first = args.pop().unwrap();
-    let new_args = vec![processor.store.deref(&first).class.clone(), second];
-    issubclass(processor, new_args)
+    let res = native_isinstance(&state.store, &first, &second);
+    if res {
+        return_value(call_stack, state.primitive_objects.true_obj.clone())
+    }
+    else {
+        return_value(call_stack, state.primitive_objects.false_obj.clone())
+    }
+}
+
+fn iter<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, mut args: Vec<ObjectRef>) {
+    if args.len() != 1 {
+        panic!(format!("__primitives__.iter takes 1 arguments, not {}", args.len()))
+    }
+    let iterator_ref = args.last().unwrap();
+    let iterator = state.store.deref(iterator_ref).clone();
+    match iterator.content {
+        ObjectContent::RandomAccessIterator(container_ref, index, container_version) => {
+            let value = {
+                let container = state.store.deref(&container_ref);
+                if container.version != container_version {
+                    panic!("Container changed while iterating.")
+                };
+                match container.content {
+                    ObjectContent::List(ref v) | ObjectContent::Tuple(ref v) => v.get(index).map(|r| r.clone()),
+                    ref c => panic!(format!("RandomAccessIterator does not support {}", container_ref.repr(&state.store)))
+                }
+            };
+            match value {
+                Some(value) => {
+                    let mut iterator = state.store.deref_mut(iterator_ref);
+                    iterator.content = ObjectContent::RandomAccessIterator(container_ref, index+1, container_version);
+                    return_value(call_stack, value.clone())
+                }
+                None => {
+                    let stopiteration = state.primitive_objects.stopiteration.clone();
+
+                    return raise(state, call_stack, stopiteration, "StopIteration instance".to_string())
+                }
+            }
+        }
+        ref c =>  {
+            let repr = iterator_ref.repr(&state.store);
+            let exc = Object::new_instance(None, state.primitive_objects.typeerror.clone(), ObjectContent::OtherObject);
+            let exc = state.store.allocate(exc);
+            raise(state, call_stack, exc, format!("{} is not an iterator", repr));
+        }
+    }
 }
 
 
@@ -121,5 +181,6 @@ pub fn get_default_primitives<EP: EnvProxy>() -> HashMap<String, PyFunction<EP>>
     builtins.insert("build_class".to_string(), build_class);
     builtins.insert("issubclass".to_string(), issubclass);
     builtins.insert("isinstance".to_string(), isinstance);
+    builtins.insert("iter".to_string(), iter);
     builtins
 }

@@ -11,8 +11,9 @@ use std::io::Read;
 use std::cell::RefCell;
 use std::rc::Rc;
 use super::marshal;
-use super::state::{State, PyResult};
+use super::state::{State, PyResult, unwind, raise, return_value};
 use super::sandbox::EnvProxy;
+use super::primitives;
 
 #[derive(Debug)]
 pub enum ProcessorError {
@@ -66,54 +67,18 @@ macro_rules! pop_stack {
     }
 }
 
-/// Unwind call stack until a try…except is found.
-fn unwind(call_stack: &mut Vec<Frame>, traceback: ObjectRef, exception: ObjectRef, value: ObjectRef) {
-    let exc_type = exception.clone(); // Looks like that's how CPython does things…
-    'outer: loop {
-        match call_stack.pop() {
-            None => panic!("Exception reached bottom of call stack."),
-            Some(mut frame) => {
-                // Unwind block stack
-                while let Some(block) = frame.block_stack.pop() {
-                    match block {
-                        Block::TryExcept(begin, end) => {
-                            // Found a try…except block
-                            frame.block_stack.push(Block::TryExcept(begin, end)); // Push it back, it will be poped by PopExcept.
-                            frame.program_counter = end;
-                            frame.var_stack.push(traceback.clone());
-                            frame.var_stack.push(value.clone());
-                            frame.var_stack.push(exc_type);
-
-                            frame.var_stack.push(traceback);
-                            frame.var_stack.push(value);
-                            frame.var_stack.push(exception);
-
-                            call_stack.push(frame);
-                            break 'outer
-                        }
-                        _ => { // Non-try…except block, exit it.
-                        }
-                    }
-                }
-            }
-        }
+macro_rules! top_stack {
+    ( $state: expr, $stack_name: expr) => {
+        py_unwrap!($state, $stack_name.top(), ProcessorError::StackTooSmall)
     }
 }
 
-macro_rules! raise {
-    ($state: ident, $call_stack: expr, $exc_class: expr, $msg: expr) => {{
-        let exc = Object::new_instance(None, $exc_class.clone(), ObjectContent::String($msg));
-        let exc = $state.store.allocate(exc);
-        // TODO: actual traceback
-        unwind($call_stack, $state.primitive_objects.none.clone(), exc, $state.primitive_objects.none.clone())
-    }}
-}
 
 
 // Load a name from the namespace
 fn load_name<EP: EnvProxy>(state: &mut State<EP>, frame: &Frame, name: &String) -> Option<ObjectRef> {
     if *name == "__primitives__" {
-        return Some(state.store.allocate(Object { name: Some("__primitives__".to_string()), content: ObjectContent::PrimitiveNamespace, class: state.primitive_objects.object.clone(), bases: None }))
+        return Some(state.store.allocate(Object::new_instance(Some("__primitives__".to_string()), state.primitive_objects.object.clone(), ObjectContent::PrimitiveNamespace)))
     }
     if *name == "__name__" {
         return Some(state.store.allocate(state.primitive_objects.new_string("<module>".to_string())))
@@ -153,7 +118,7 @@ fn load_attr<EP: EnvProxy>(state: &mut State<EP>, obj: &Object, name: &String) -
             if let ObjectContent::PrimitiveNamespace = obj.content {
                 match state.primitive_objects.names_map.get(name) {
                     Some(obj_ref) => Some(obj_ref.clone()),
-                    None => Some(state.store.allocate(Object { name: Some(name.clone()), content: ObjectContent::PrimitiveFunction(name.clone()), class: state.primitive_objects.function_type.clone(), bases: None })),
+                    None => Some(state.store.allocate(Object::new_instance(Some(name.clone()), state.primitive_objects.function_type.clone(), ObjectContent::PrimitiveFunction(name.clone())))),
                 }
             }
             else {
@@ -201,26 +166,27 @@ fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame
                 call_stack.push(new_frame);
             }
             else {
-                raise!(state, call_stack, state.primitive_objects.processorerror, format!("Not a code object {}", func_ref.repr(&state.store)));
+                let exc = state.primitive_objects.processorerror.clone();
+                let repr = func_ref.repr(&state.store);
+                raise(state, call_stack, exc, format!("Not a code object {}", repr));
             }
         },
         ObjectContent::PrimitiveFunction(ref name) => {
             let function_opt = state.primitive_functions.get(name).map(|o| *o);
             match function_opt {
                 None => {
-                    raise!(state, call_stack, state.primitive_objects.baseexception, format!("Unknown primitive {}", name)); // Should have errored before
+                    let exc = state.primitive_objects.baseexception.clone();
+                    raise(state, call_stack, exc, format!("Unknown primitive {}", name)); // Should have errored before
                 },
                 Some(function) => {
-                    let res = function(state, args); // Call the primitive
-                    match res {
-                        PyResult::Return(res) => call_stack.last_mut().unwrap().var_stack.push(res),
-                        PyResult::Raised => ()
-                    };
+                    function(state, call_stack, args); // Call the primitive
                 }
             }
         },
         _ => {
-            raise!(state, call_stack, state.primitive_objects.typeerror.clone(), format!("Not a function object {:?}", state.store.deref(func_ref)));
+            let exc = state.primitive_objects.typeerror.clone();
+            let repr = func_ref.repr(&state.store);
+            raise(state, call_stack, exc, format!("Not a function object {:?}", repr));
         }
     }
 }
@@ -232,6 +198,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
         let instruction = {
             let frame = call_stack.last_mut().unwrap();
             let instruction = py_unwrap!(state, frame.instructions.get(frame.program_counter), ProcessorError::InvalidProgramCounter);
+            //println!("{} {:?}", frame.program_counter, instruction); // Useful for debugging
             frame.program_counter += 1;
             instruction.clone()
         };
@@ -257,10 +224,14 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                     let container = state.store.deref(&container_ref).content.clone();
                     (container, index)
                 };
+                let typeerror = state.primitive_objects.typeerror.clone();
                 match (container, index) {
                     (ObjectContent::Tuple(v), ObjectContent::Int(i)) | (ObjectContent::List(v), ObjectContent::Int(i)) => {
                         match v.get(i as usize) { // TODO: overflow check
-                            None => raise!(state, call_stack, state.primitive_objects.nameerror, format!("Index out of range")),
+                            None => {
+                                let exc = state.primitive_objects.nameerror.clone();
+                                raise(state, call_stack, exc, format!("Index out of range"))
+                            },
                             Some(obj_ref) => {
                                 let frame = call_stack.last_mut().unwrap();
                                 frame.var_stack.push(obj_ref.clone())
@@ -268,24 +239,33 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                         }
                     },
                     (ObjectContent::Tuple(_), index) =>
-                        raise!(state, call_stack, state.primitive_objects.typeerror.clone(), format!("tuple indices must be int, not {:?}", index)),
+                        raise(state, call_stack, typeerror, format!("tuple indices must be int, not {:?}", index)),
                     (ObjectContent::List(_), index) =>
-                        raise!(state, call_stack, state.primitive_objects.typeerror.clone(), format!("list indices must be int, not {:?}", index)),
+                        raise(state, call_stack, typeerror, format!("list indices must be int, not {:?}", index)),
                     (container, _index) =>
-                        raise!(state, call_stack, state.primitive_objects.typeerror.clone(), format!("{:?} object is not subscriptable", container)),
+                        raise(state, call_stack, typeerror, format!("{:?} object is not subscriptable", container)),
                 }
+            }
+            Instruction::GetIter => {
+                let frame = call_stack.last_mut().unwrap();
+                let obj_ref = pop_stack!(state, frame.var_stack);
+                frame.var_stack.push(obj_ref.iter(state));
             }
             Instruction::LoadBuildClass => {
                 let frame = call_stack.last_mut().unwrap();
-                let obj = Object { name: Some("__build_class__".to_string()), content: ObjectContent::PrimitiveFunction("build_class".to_string()), class: state.primitive_objects.function_type.clone(), bases: None };
+                let obj = Object::new_instance(Some("__build_class__".to_string()), state.primitive_objects.function_type.clone(), ObjectContent::PrimitiveFunction("build_class".to_string()));
                 frame.var_stack.push(state.store.allocate(obj));
             }
             Instruction::ReturnValue => {
-                let mut frame = call_stack.pop().unwrap();
-                let result = pop_stack!(state, frame.var_stack);
-                match call_stack.last_mut() {
-                    Some(parent_frame) => parent_frame.var_stack.push(result),
-                    None => return PyResult::Return(result), // End of program
+                if call_stack.len() == 1 {
+                    let mut frame = call_stack.pop().unwrap();
+                    let result = pop_stack!(state, frame.var_stack);
+                    return PyResult::Return(result);
+                }
+                else {
+                    let mut frame = call_stack.pop().unwrap();
+                    let result = pop_stack!(state, frame.var_stack);
+                    return_value(call_stack, result)
                 }
             }
             Instruction::PopBlock => {
@@ -297,8 +277,12 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                     let frame = call_stack.last_mut().unwrap();
                     pop_stack!(state, frame.var_stack)
                 };
-                let status = state.store.deref(&status_ref);
-                match status.content {
+                let status_content = {
+                    let status = state.store.deref(&status_ref);
+                    let content = status.content.clone(); // TODO: copy only if needed
+                    content
+                };
+                match status_content {
                     ObjectContent::Int(i) => panic!("TODO: finally int status"), // TODO
                     ObjectContent::OtherObject => {
                         let (val, traceback) = {
@@ -309,11 +293,11 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                         };
                         let exc = status_ref;
                         call_stack.last_mut().unwrap().block_stack.pop().unwrap(); // Remove this try…except block
-                        unwind(call_stack, traceback, exc, val);
+                        unwind(state, call_stack, traceback, exc, val);
                     }
                     ObjectContent::None => {
                     }
-                    _ => panic!(format!("Invalid finally status: {:?}", status))
+                    _ => panic!(format!("Invalid finally status: {:?}", state.store.deref(&status_ref)))
                 }
             }
             Instruction::PopExcept => {
@@ -331,6 +315,16 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 let obj_ref = pop_stack!(state, frame.var_stack);
                 frame.locals.borrow_mut().insert(name, obj_ref);
             }
+            Instruction::ForIter(i) => {
+                let iterator = {
+                    let frame = call_stack.last_mut().unwrap();
+                    frame.block_stack.push(Block::ExceptPopGoto(state.primitive_objects.stopiteration.clone(), 1, frame.program_counter+i));
+                    let iterator = top_stack!(state, frame.var_stack);
+                    iterator.clone()
+                };
+                let iter_func = state.store.allocate(Object::new_instance(None, state.primitive_objects.function_type.clone(), ObjectContent::PrimitiveFunction("iter".to_string())));
+                call_function(state, call_stack, &iter_func, vec![iterator], vec![]);
+            }
             Instruction::LoadConst(i) => {
                 let frame = call_stack.last_mut().unwrap();
                 frame.var_stack.push(py_unwrap!(state, frame.code.consts.get(i), ProcessorError::InvalidConstIndex).clone())
@@ -343,7 +337,10 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                     (name.clone(), res)
                 };
                 match res {
-                    None => raise!(state, call_stack, state.primitive_objects.nameerror, format!("Unknown variable {}", name)),
+                    None => {
+                        let exc = state.primitive_objects.nameerror.clone();
+                        raise(state, call_stack, exc, format!("Unknown variable {}", name))
+                    },
                     Some(obj_ref) => {
                         let frame = call_stack.last_mut().unwrap();
                         frame.var_stack.push(obj_ref)
@@ -360,7 +357,10 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 };
                 let res = load_attr(state, &obj, &name);
                 match res {
-                    None => raise!(state, call_stack, state.primitive_objects.nameerror, format!("Unknown variable {}", name)),
+                    None => {
+                        let exc = state.primitive_objects.nameerror.clone();
+                        raise(state, call_stack, exc, format!("Unknown variable {}", name))
+                    },
                     Some(obj_ref) => {
                         let frame = call_stack.last_mut().unwrap();
                         frame.var_stack.push(obj_ref)
@@ -392,11 +392,17 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 // TODO: add support for tuples
                 let pattern_ref = pop_stack!(state, frame.var_stack);
                 let exc_ref = pop_stack!(state, frame.var_stack);
-                let isinstance = state.primitive_functions.get("isinstance").unwrap().clone();
-                match isinstance(state, vec![exc_ref, pattern_ref]) {
-                    PyResult::Return(val) => frame.var_stack.push(val),
-                    PyResult::Raised => (),
+                let val = if primitives::native_isinstance(&state.store, &exc_ref, &pattern_ref) {
+                    state.primitive_objects.true_obj.clone()
                 }
+                else {
+                    state.primitive_objects.false_obj.clone()
+                };
+                frame.var_stack.push(val)
+            }
+            Instruction::JumpAbsolute(target) => {
+                let frame = call_stack.last_mut().unwrap();
+                frame.program_counter = target
             }
             Instruction::JumpForward(delta) => {
                 let frame = call_stack.last_mut().unwrap();
@@ -423,7 +429,9 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             }
             Instruction::RaiseVarargs(1) => {
                 let exception = pop_stack!(state, call_stack.last_mut().unwrap().var_stack);
-                unwind(call_stack, state.primitive_objects.none.clone(), exception, state.primitive_objects.none.clone());
+                let traceback = state.primitive_objects.none.clone();
+                let value = state.primitive_objects.none.clone();
+                unwind(state, call_stack, traceback, exception, value);
             }
             Instruction::RaiseVarargs(2) => {
                 panic!("RaiseVarargs(2) not implemented.")
@@ -457,7 +465,8 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 let func_name = match obj {
                     ObjectContent::String(ref s) => s.clone(),
                     name => {
-                        raise!(state, call_stack, state.primitive_objects.typeerror.clone(), format!("function names must be strings, not {:?}", name));
+                        let exc = state.primitive_objects.typeerror.clone();
+                        raise(state, call_stack, exc, format!("function names must be strings, not {:?}", name));
                         continue
                     }
                 };
