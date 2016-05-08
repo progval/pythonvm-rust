@@ -216,14 +216,14 @@ impl ObjectRef {
 
 
 pub struct ObjectStore {
-    all_objects: HashMap<ObjectRef, Object>,
+    all_objects: HashMap<usize, Object>,
 }
 
 impl fmt::Debug for ObjectStore {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         try!(write!(f, "ObjectStore {{ all_objects: HashMap {{\n"));
-        for (ref obj_ref, ref obj) in self.all_objects.iter() {
-            try!(write!(f, "\t{} => {:?}\n", obj_ref.id, obj));
+        for (ref id, ref obj) in self.all_objects.iter() {
+            try!(write!(f, "\t{} => {:?}\n", id, obj));
         }
         write!(f, "}}}}\n")
     }
@@ -236,24 +236,24 @@ impl ObjectStore {
 
     pub fn allocate(&mut self, obj: Object) -> ObjectRef {
         let obj_ref = ObjectRef::new();
-        self.all_objects.insert(obj_ref.clone(), obj);
+        self.all_objects.insert(obj_ref.id.clone(), obj);
         obj_ref
     }
 
     pub fn allocate_at(&mut self, obj_ref: ObjectRef, obj: Object) {
-        match self.all_objects.get(&obj_ref) {
-            None => self.all_objects.insert(obj_ref, obj),
+        match self.all_objects.get(&obj_ref.id) {
+            None => self.all_objects.insert(obj_ref.id, obj),
             _ => panic!("Already allocated"),
         };
     }
 
     pub fn deref(&self, obj_ref: &ObjectRef) -> &Object {
         // TODO: check the reference is valid
-        self.all_objects.get(obj_ref).unwrap()
+        self.all_objects.get(&obj_ref.id).unwrap()
     }
     pub fn deref_mut(&mut self, obj_ref: &ObjectRef) -> &mut Object {
         // TODO: check the reference is valid
-        self.all_objects.get_mut(obj_ref).unwrap()
+        self.all_objects.get_mut(&obj_ref.id).unwrap()
     }
 }
 
