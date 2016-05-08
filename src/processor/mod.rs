@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::iter::FromIterator;
 use super::marshal;
 use super::state::{State, PyResult, unwind, raise, return_value};
 use super::sandbox::EnvProxy;
@@ -129,7 +130,7 @@ fn load_attr<EP: EnvProxy>(state: &mut State<EP>, obj: &Object, name: &String) -
 }
 
 // Call a primitive / function / code object, with arguments.
-fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, func_ref: &ObjectRef, mut args: Vec<ObjectRef>, kwargs: Vec<ObjectRef>) {
+fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, func_ref: &ObjectRef, mut args: Vec<ObjectRef>, kwargs: Vec<(ObjectRef, ObjectRef)>) {
     // TODO: clone only if necessary
     match state.store.deref(func_ref).content.clone() {
         ObjectContent::Class(None) => {
@@ -141,33 +142,69 @@ fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame
             let frame = call_stack.last_mut().unwrap();
             frame.var_stack.push(state.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject)))
         },
-        ObjectContent::Function(ref func_module, ref code_ref) => {
+        ObjectContent::Function(ref func_module, ref code_ref, ref defaults) => {
             let code = state.store.deref(code_ref).content.clone();
             if let ObjectContent::Code(code) = code {
-                if code.co_varargs() { // If it has a *args argument
+
+                let mut locals = Rc::new(RefCell::new(defaults.clone()));
+
+                if let Some(starargs_name) = code.get_varargs_name() { // If it has a *args argument
                     if code.argcount > args.len() {
                         panic!(format!("{}() takes at least {} arguments, but {} was/were given.", code.name, code.argcount, args.len()))
                     };
                     let to_vararg = args.drain(code.argcount..).collect();
                     let obj_ref = state.store.allocate(state.primitive_objects.new_tuple(to_vararg));
-                    args.push(obj_ref);
+
+                    // Bind *args
+                    assert_eq!(None, locals.borrow_mut().insert(starargs_name.clone(), obj_ref));
                 }
-                else if code.argcount != args.len() {
+                else if code.argcount != args.len() { // If it has no *args argument
                     panic!(format!("{}() takes {} arguments, but {} was/were given.", code.name, code.argcount, args.len()))
                 };
-                let mut locals = Rc::new(RefCell::new(HashMap::new()));
+
+                // Handle keyword arguments
+                let mut remaining_kwargs = vec![]; // arguments that will go to **kwargs
+                {
+                    let explicit_keywords = code.keywords();
+                    let mut locals = locals.borrow_mut();
+                    for (key, value) in kwargs.into_iter() {
+                        let key_str = match state.store.deref(&key).content {
+                            ObjectContent::String(ref s) => s,
+                            _ => panic!("Keyword names should be strings."),
+                        };
+                        if explicit_keywords.contains(key_str) {
+                            locals.insert(key_str.clone(), value);
+                        }
+                        else {
+                            remaining_kwargs.push((key, value))
+                        }
+                    }
+                }
+
+                if let Some(starkwargs_name) = code.get_varkwargs_name() { // If it has a **kwargs argument
+                    let obj_ref = state.store.allocate(state.primitive_objects.new_dict(remaining_kwargs));
+                    locals.borrow_mut().insert(starkwargs_name.clone(), obj_ref);
+                }
+                else { // If it has no **kwargs argument
+                    if remaining_kwargs.len() != 0 {
+                        panic!(format!("Unknown keyword argument to function {} with no **kwargs", code.name))
+                    }
+                }
+
+                // Bind positional arguments
                 {
                     let mut locals = locals.borrow_mut();
                     for (argname, argvalue) in code.varnames.iter().zip(args) {
                         locals.insert(argname.clone(), argvalue);
                     };
                 }
+
                 let new_frame = Frame::new(func_ref.clone(), *code, locals);
                 call_stack.push(new_frame);
             }
             else {
                 let exc = state.primitive_objects.processorerror.clone();
-                let repr = func_ref.repr(&state.store);
+                let repr = code_ref.repr(&state.store);
                 raise(state, call_stack, exc, format!("Not a code object {}", repr));
             }
         },
@@ -460,13 +497,13 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 let mut func;
                 {
                     let frame = call_stack.last_mut().unwrap();
-                    kwargs = py_unwrap!(state, frame.var_stack.pop_many(nb_kwargs*2), ProcessorError::StackTooSmall);
+                    kwargs = py_unwrap!(state, frame.var_stack.pop_n_pairs(nb_kwargs), ProcessorError::StackTooSmall);
                     args = py_unwrap!(state, frame.var_stack.pop_many(nb_args), ProcessorError::StackTooSmall);
                     func = pop_stack!(state, frame.var_stack);
                 }
                 call_function(state, call_stack, &func, args, kwargs)
             },
-            Instruction::MakeFunction(0, 0, 0) => {
+            Instruction::MakeFunction(0, nb_default_kwargs, 0) => {
                 // TODO: consume default arguments and annotations
                 let obj = {
                     let frame = call_stack.last_mut().unwrap();
@@ -483,7 +520,16 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 };
                 let frame = call_stack.last_mut().unwrap();
                 let code = pop_stack!(state, frame.var_stack);
-                let func = state.primitive_objects.new_function(func_name, frame.object.module(&state.store), code);
+                let raw_kwdefaults = py_unwrap!(state, frame.var_stack.pop_n_pairs(nb_default_kwargs), ProcessorError::StackTooSmall);
+                let mut kwdefaults: HashMap<String, ObjectRef> = HashMap::new();
+                kwdefaults.reserve(nb_default_kwargs);
+                for (key, value) in raw_kwdefaults {
+                    match state.store.deref(&key).content {
+                        ObjectContent::String(ref s) => { kwdefaults.insert(s.clone(), value); },
+                        _ => panic!("Defaults' keys must be strings."),
+                    }
+                }
+                let func = state.primitive_objects.new_function(func_name, frame.object.module(&state.store), code, kwdefaults);
                 frame.var_stack.push(state.store.allocate(func))
             },
             _ => panic!(format!("todo: instruction {:?}", instruction)),

@@ -8,6 +8,7 @@ pub trait VarStack : Debug {
     fn pop_many(&mut self, count: usize) -> Option<Vec<Self::Item>>;
     fn push(&mut self, value: Self::Item);
     fn pop_all_and_get_n_last(&mut self, nb: usize) -> Option<Vec<Self::Item>>;
+    fn pop_n_pairs(&mut self, nb: usize) -> Option<Vec<(Self::Item, Self::Item)>>;
 }
 
 #[derive(Debug)]
@@ -27,7 +28,7 @@ impl<Item> VectorVarStack<Item> {
     }
 }
 
-impl<Item> VarStack for VectorVarStack<Item> where Item: Debug {
+impl<Item: Clone> VarStack for VectorVarStack<Item> where Item: Debug {
     type Item = Item;
 
     fn top(&self) -> Option<&Self::Item> {
@@ -60,5 +61,18 @@ impl<Item> VarStack for VectorVarStack<Item> where Item: Debug {
             self.vector.truncate(nb);
             Some(self.vector.drain(..).collect())
         }
+    }
+
+    fn pop_n_pairs(&mut self, nb: usize) -> Option<Vec<(Self::Item, Self::Item)>> {
+        self.pop_many(nb*2).map(|values| {
+            let mut pairs = Vec::<(Self::Item, Self::Item)>::new();
+            pairs.reserve(nb);
+            for chunk in values.chunks(2) {
+                assert!(chunk.len() == 2);
+                // TODO: remove clones. http://stackoverflow.com/q/37097395/539465
+                pairs.push((chunk.get(0).unwrap().clone(), chunk.get(1).unwrap().clone()));
+            }
+            pairs
+        })
     }
 }

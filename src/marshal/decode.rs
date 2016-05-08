@@ -224,7 +224,7 @@ pub fn read_object<R: io::Read>(reader: &mut R, store: &mut ObjectStore, primiti
             let lnotab = try!(read_object(reader, store, primitive_objects, references)); // TODO: decode this
             let code = Code {
                 argcount: argcount as usize,
-                kwonlyargcount: kwonlyargcount,
+                kwonlyargcount: kwonlyargcount as usize,
                 nlocals: nlocals,
                 stacksize: stacksize,
                 flags: flags,

@@ -1,5 +1,6 @@
 extern crate itertools;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 use std::fmt;
 use self::itertools::Itertools;
@@ -12,7 +13,7 @@ use super::sandbox::EnvProxy;
 #[derive(Eq)]
 pub struct Code {
     pub argcount: usize,
-    pub kwonlyargcount: u32,
+    pub kwonlyargcount: usize,
     pub nlocals: u32,
     pub stacksize: u32,
     pub flags: u32,
@@ -32,6 +33,36 @@ impl Code {
     pub fn co_varargs(&self) -> bool {
         self.flags & 0x4 != 0
     }
+    pub fn co_varkwargs(&self) -> bool {
+        self.flags & 0x8 != 0
+    }
+    pub fn get_varargs_name(&self) -> Option<&String> {
+        if self.co_varargs() {
+            Some(self.varnames.get(self.argcount+self.kwonlyargcount).unwrap())
+        }
+        else {
+            None
+        }
+    }
+    pub fn get_varkwargs_name(&self) -> Option<&String> {
+        if self.co_varkwargs() {
+            let mut index = self.argcount+self.kwonlyargcount;
+            if self.co_varkwargs() {
+                index += 1;
+            }
+            Some(self.varnames.get(index).unwrap())
+        }
+        else {
+            None
+        }
+    }
+    pub fn keywords(&self) -> HashSet<&String> {
+        let mut res = HashSet::new();
+        for name in self.varnames[self.argcount..(self.argcount+self.kwonlyargcount)].iter() {
+            res.insert(name);
+        }
+        res
+    }
 }
 
 #[derive(Debug)]
@@ -48,9 +79,10 @@ pub enum ObjectContent {
     List(Vec<ObjectRef>),
     Code(Box<Code>),
     Set(Vec<ObjectRef>),
+    Dict(Vec<(ObjectRef, ObjectRef)>),
     FrozenSet(Vec<ObjectRef>),
     Bytes(Vec<u8>),
-    Function(String, ObjectRef), // module, code
+    Function(String, ObjectRef, HashMap<String, ObjectRef>), // module, code, default arguments
     Module(ObjectRef),
     PrimitiveNamespace, // __primitives__
     PrimitiveFunction(String),
@@ -131,12 +163,13 @@ impl ObjectRef {
             ObjectContent::Int(ref i) => i.to_string(),
             ObjectContent::Bytes(ref s) => "<bytes>".to_string(), // TODO
             ObjectContent::String(ref s) => format!("'{}'", s), // TODO: escape
+            ObjectContent::Dict(ref l) => format!("{{{}}}", l.iter().map(|arg| { let (ref k, ref v) = *arg; format!("{}: {}", k.repr(store), v.repr(store))}).join(", ")),
             ObjectContent::Tuple(ref l) => format!("tuple({})", ObjectRef::repr_vec(l, store)),
             ObjectContent::List(ref l) => format!("[{}]", ObjectRef::repr_vec(l, store)),
             ObjectContent::Code(_) => "<code object>".to_string(),
             ObjectContent::Set(ref l) => format!("set({})", ObjectRef::repr_vec(l, store)),
             ObjectContent::FrozenSet(ref l) => format!("frozenset({})", ObjectRef::repr_vec(l, store)),
-            ObjectContent::Function(ref module, ref _code) => {
+            ObjectContent::Function(ref module, ref _code, ref _defaults) => {
                 match obj.name {
                     None => format!("<anonymous function in module {}>", module),
                     Some(ref s) => format!("<function {} in module {}>", s, module),
@@ -167,7 +200,7 @@ impl ObjectRef {
         let func = store.deref(self);
         let ref name = func.name;
         match func.content {
-            ObjectContent::Function(ref module_name, ref _code) => module_name.clone(),
+            ObjectContent::Function(ref module_name, ref _code, ref _defaults) => module_name.clone(),
             ObjectContent::Module(ref _code) => name.clone().unwrap(),
             _ => panic!(format!("Not a function/module: {:?}", func)),
         }
@@ -241,6 +274,7 @@ pub struct PrimitiveObjects {
 
     pub set_type: ObjectRef,
     pub frozenset_type: ObjectRef,
+    pub dict_type: ObjectRef,
 
     pub bytes_type: ObjectRef,
     pub str_type: ObjectRef,
@@ -300,6 +334,7 @@ impl PrimitiveObjects {
         let list_type = store.allocate(Object::new_class("list".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let set_type = store.allocate(Object::new_class("set".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let frozenset_type = store.allocate(Object::new_class("frozenset".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
+        let dict_type = store.allocate(Object::new_class("dict".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let bytes_type = store.allocate(Object::new_class("bytes".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let str_type = store.allocate(Object::new_class("str".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
         let iterator_type = store.allocate(Object::new_class("iterator".to_string(), None, type_ref.clone(), vec![obj_ref.clone()]));
@@ -335,6 +370,7 @@ impl PrimitiveObjects {
         map.insert("list".to_string(), list_type.clone());
         map.insert("set".to_string(), set_type.clone());
         map.insert("frozenset".to_string(), frozenset_type.clone());
+        map.insert("dict".to_string(), dict_type.clone());
         map.insert("bytes".to_string(), bytes_type.clone());
         map.insert("str".to_string(), str_type.clone());
         map.insert("function".to_string(), function_type.clone());
@@ -359,7 +395,7 @@ impl PrimitiveObjects {
             none_type: none_type, none: none,
             int_type: int_type, bool_type: bool_type, true_obj: true_obj, false_obj: false_obj,
             tuple_type: tuple_type, list_type: list_type,
-            set_type: set_type, frozenset_type: frozenset_type,
+            set_type: set_type, frozenset_type: frozenset_type, dict_type: dict_type,
             bytes_type: bytes_type, str_type: str_type,
             iterator_type: iterator_type,
             function_type: function_type, code_type: code_type,
@@ -389,14 +425,17 @@ impl PrimitiveObjects {
     pub fn new_set(&self, v: Vec<ObjectRef>) -> Object {
         Object::new_instance(None, self.set_type.clone(), ObjectContent::Set(v))
     }
+    pub fn new_dict(&self, v: Vec<(ObjectRef, ObjectRef)>) -> Object {
+        Object::new_instance(None, self.dict_type.clone(), ObjectContent::Dict(v))
+    }
     pub fn new_frozenset(&self, v: Vec<ObjectRef>) -> Object {
         Object::new_instance(None, self.frozenset_type.clone(), ObjectContent::FrozenSet(v))
     }
     pub fn new_code(&self, c: Code) -> Object {
         Object::new_instance(None, self.code_type.clone(), ObjectContent::Code(Box::new(c)))
     }
-    pub fn new_function(&self, name: String, module_name: String, code: ObjectRef) -> Object {
-        Object::new_instance(Some(name), self.function_type.clone(), ObjectContent::Function(module_name, code))
+    pub fn new_function(&self, name: String, module_name: String, code: ObjectRef, defaults: HashMap<String, ObjectRef>) -> Object {
+        Object::new_instance(Some(name), self.function_type.clone(), ObjectContent::Function(module_name, code, defaults))
     }
     pub fn new_module(&self, name: String, code: ObjectRef) -> Object {
         Object::new_instance(Some(name), self.module.clone(), ObjectContent::Module(code))
