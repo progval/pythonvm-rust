@@ -1,2 +1,5 @@
 print('foo')
 print('foo', 'bar')
+print('foo', 'bar', sep='bla')
+print('foo', 'bar', sep='bla', end='bli')
+print('foo', 'bar', end='bli')
