@@ -8,6 +8,8 @@ A Python virtual machine, written in Rust.
 
 * prints strings to stdout
 * basic exceptions
+* for loops
+* functions, positional arguments, keyword arguments, `*args`, `**kwargs`
 * useable as a library
 * a fine-grained sandbox
 
