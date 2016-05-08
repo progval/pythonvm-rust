@@ -16,7 +16,7 @@ pub enum CmpOperator {
 }
 
 impl CmpOperator {
-    pub fn from_bytecode(n: u16) -> Self {
+    pub fn from_bytecode(n: u32) -> Self {
         match n {
             0 => CmpOperator::Lt,
             1 => CmpOperator::Leq,
@@ -52,6 +52,7 @@ pub enum Instruction {
     ForIter(usize),
     LoadConst(usize),
     LoadName(usize),
+    BuildTuple(usize),
     LoadAttr(usize),
     SetupLoop(usize),
     SetupExcept(usize),
@@ -70,12 +71,13 @@ pub enum Instruction {
 #[derive(Debug)]
 pub struct InstructionDecoder<I> where I: Iterator {
     bytestream: I,
+    arg_prefix: Option<u32>,
     pending_nops: u8, // Number of NOPs to be inserted after this instruction to match CPython's addresses (instructions have different sizes)
 }
 
 impl<I> InstructionDecoder<I> where I: Iterator {
     pub fn new(bytes: I) -> InstructionDecoder<I> {
-        InstructionDecoder { bytestream: bytes, pending_nops: 0, }
+        InstructionDecoder { bytestream: bytes, pending_nops: 0, arg_prefix: None, }
     }
 }
 
@@ -89,11 +91,19 @@ impl<'a, I> InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
             _ => panic!("End of stream in the middle of an instruction."),
         }
     }
-    fn read_argument(&mut self) -> u16 {
+    fn read_argument(&mut self) -> u32 {
         match (self.bytestream.next(), self.bytestream.next()) {
             (Some(b1), Some(b2)) => {
                 self.pending_nops += 2;
-                ((*b2 as u16) << 8) + (*b1 as u16)},
+                let arg = ((*b2 as u32) << 8) + (*b1 as u32);
+                if let Some(prefix) = self.arg_prefix {
+                    self.arg_prefix = None;
+                    (prefix << 16) + arg
+                }
+                else {
+                    arg
+                }
+            },
             _ => panic!("End of stream in the middle of an instruction."),
         }
     }
@@ -122,6 +132,7 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
                 93 => Instruction::ForIter(self.read_argument() as usize),
                 100 => Instruction::LoadConst(self.read_argument() as usize),
                 101 => Instruction::LoadName(self.read_argument() as usize),
+                102 => Instruction::BuildTuple(self.read_argument() as usize),
                 106 => Instruction::LoadAttr(self.read_argument() as usize),
                 107 => Instruction::CompareOp(CmpOperator::from_bytecode(self.read_argument())),
                 110 => Instruction::JumpForward(self.read_argument() as usize + 2), // +2, because JumpForward takes 3 bytes, and the relative address is computed from the next instruction.
@@ -142,6 +153,7 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
                     let nb_annot = 0;
                     Instruction::MakeFunction(nb_pos as usize, nb_kw as usize, nb_annot as usize)
                 },
+                144 => { self.arg_prefix = Some(self.read_argument()); Instruction::Nop },
                 _ => panic!(format!("Opcode not supported: {}", opcode)),
             }
         })

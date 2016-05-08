@@ -390,6 +390,12 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                     }
                 }
             }
+            Instruction::BuildTuple(size) => {
+                let frame = call_stack.last_mut().unwrap();
+                let mut content = py_unwrap!(state, frame.var_stack.pop_many(size), ProcessorError::StackTooSmall);
+                let tuple = state.primitive_objects.new_tuple(content);
+                frame.var_stack.push(state.store.allocate(tuple));
+            }
             Instruction::LoadAttr(i) => {
                 let (name, obj) = {
                     let frame = call_stack.last_mut().unwrap();
