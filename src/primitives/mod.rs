@@ -1,10 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::collections::linked_list::LinkedList;
+use std::rc::Rc;
+use std::cell::RefCell;
+use std::iter::IntoIterator;
 use super::sandbox::EnvProxy;
 use super::state::{State, PyResult, PyFunction, raise, return_value};
 use super::objects::{ObjectRef, ObjectContent, Object, ObjectStore};
 use super::processor::frame::Frame;
+use super::processor::instructions::{Instruction, InstructionDecoder};
+use super::varstack::{VarStack, VectorVarStack};
 
 macro_rules! parse_first_arguments {
     ( $funcname:expr, $store:expr, $args:ident, $args_iter:ident, $( $argname:tt $argexpected:tt : { $($argpattern:pat => $argcode:block,)* } ),* ) => {{
@@ -52,14 +57,17 @@ fn write_stdout<EP: EnvProxy>(processor: &mut State<EP>, call_stack: &mut Vec<Fr
     return_value(call_stack, processor.primitive_objects.none.clone())
 }
 
-fn build_class<EP: EnvProxy>(processor: &mut State<EP>, call_stack: &mut Vec<Frame>, args: Vec<ObjectRef>) {
+fn build_class<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, args: Vec<ObjectRef>) {
     let name;
     let code;
     let mut args_iter = args.into_iter();
-    parse_first_arguments!("__primitives__.build_class", processor.store, args, args_iter,
+    parse_first_arguments!("__primitives__.build_class", state.store, args, args_iter,
         "func" "a function": {
             ObjectContent::Function(_, ref code_arg, _) => {
-                code = code_arg.clone();
+                match state.store.deref(code_arg).content {
+                    ObjectContent::Code(ref code_) => code = code_.clone(),
+                    _ => panic!("__build_class__'s function argument has a code that is not code.")
+                }
             },
         },
         "name" "a string": {
@@ -68,12 +76,34 @@ fn build_class<EP: EnvProxy>(processor: &mut State<EP>, call_stack: &mut Vec<Fra
     );
     let bases: Vec<ObjectRef> = args_iter.collect();
     let bases = if bases.len() == 0 {
-        vec![processor.primitive_objects.object.clone()]
+        vec![state.primitive_objects.object.clone()]
     }
     else {
         bases
     };
-    return_value(call_stack, processor.store.allocate(Object::new_class(name, Some(code), processor.primitive_objects.type_.clone(), bases)))
+
+
+    let mut attributes = Rc::new(RefCell::new(HashMap::new()));
+    let cls_ref = state.store.allocate(Object::new_class(name, Some(attributes.clone()), state.primitive_objects.type_.clone(), bases));
+
+    let mut instructions: Vec<Instruction> = InstructionDecoder::new(code.code.iter()).collect();
+
+    // Hack to made the class' code return the class instead of None
+    assert_eq!(instructions.pop(), Some(Instruction::ReturnValue));
+    instructions.pop(); // LoadConst None
+    instructions.push(Instruction::PushImmediate(cls_ref.clone()));
+    instructions.push(Instruction::ReturnValue);
+
+    let mut frame = Frame {
+        object: cls_ref,
+        var_stack: VectorVarStack::new(),
+        block_stack: vec![],
+        locals: attributes,
+        instructions: instructions,
+        code: (*code).clone(),
+        program_counter: 0,
+    };
+    call_stack.push(frame);
 }
 
 pub fn native_issubclass(store: &ObjectStore, first: &ObjectRef, second: &ObjectRef) -> bool {

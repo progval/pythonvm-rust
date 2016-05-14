@@ -3,6 +3,7 @@
 import os
 import sys
 import glob
+import traceback
 import subprocess
 
 SOURCE_DIR = os.path.dirname('__file__')
@@ -17,19 +18,24 @@ all_ok = True
 
 for filename in glob.glob(TESTS_DIR + os.path.sep + '*.py'):
     print('Running test: {}'.format(filename))
-    vm_result = subprocess.check_output([BIN, LIB_DIR, filename + 'c'], universal_newlines=True)
     system_python_result = subprocess.check_output([sys.executable, filename], universal_newlines=True)
-    if vm_result != system_python_result:
-        print('=' * 100)
-        print('Test {} failed.'.format(filename))
-        print('-' * 100)
-        print('System Python:')
-        print(system_python_result)
-        print('-' * 100)
-        print('VM result:')
-        print(vm_result)
-        print('=' * 100)
+    try:
+        vm_result = subprocess.check_output([BIN, LIB_DIR, filename + 'c'], universal_newlines=True)
+    except subprocess.CalledProcessError as e:
+        traceback.print_exc()
         all_ok = False
+    else:
+        if vm_result != system_python_result:
+            print('=' * 100)
+            print('Test {} failed.'.format(filename))
+            print('-' * 100)
+            print('System Python:')
+            print(system_python_result)
+            print('-' * 100)
+            print('VM result:')
+            print(vm_result)
+            print('=' * 100)
+            all_ok = False
 
 if all_ok:
     exit(0)

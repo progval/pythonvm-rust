@@ -2,6 +2,9 @@ extern crate itertools;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
+use std::borrow::Cow;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::fmt;
 use self::itertools::Itertools;
 use super::state::State;
@@ -86,7 +89,7 @@ pub enum ObjectContent {
     Module(ObjectRef),
     PrimitiveNamespace, // __primitives__
     PrimitiveFunction(String),
-    Class(Option<ObjectRef>),
+    Class,
     RandomAccessIterator(ObjectRef, usize, u64), // container, index, container version
     OtherObject,
 }
@@ -101,6 +104,7 @@ pub struct Object {
     pub content: ObjectContent,
     pub class: ObjectRef,
     pub bases: Option<Vec<ObjectRef>>, // superclasses
+    pub attributes: Option<Rc<RefCell<HashMap<String, ObjectRef>>>>,
 }
 
 impl Object {
@@ -114,16 +118,18 @@ impl Object {
             content: content,
             class: class,
             bases: None,
+            attributes: Some(Rc::new(RefCell::new(HashMap::new()))),
         }
     }
 
-    pub fn new_class(name: String, code: Option<ObjectRef>, metaclass: ObjectRef, bases: Vec<ObjectRef>) -> Object {
+    pub fn new_class(name: String, attributes: Option<Rc<RefCell<HashMap<String, ObjectRef>>>>, metaclass: ObjectRef, bases: Vec<ObjectRef>) -> Object {
         Object {
             version: Object::new_version(),
             name: Some(name),
-            content: ObjectContent::Class(code),
+            content: ObjectContent::Class,
             class: metaclass,
             bases: Some(bases),
+            attributes: attributes,
         }
     }
 }
@@ -177,7 +183,7 @@ impl ObjectRef {
             },
             ObjectContent::PrimitiveNamespace => "__primitives__".to_string(),
             ObjectContent::PrimitiveFunction(ref s) => format!("__primitives__.{}", s),
-            ObjectContent::Class(_) => {
+            ObjectContent::Class => {
                 match obj.name {
                     None => "<anonymous class>".to_string(),
                     Some(ref s) => format!("<class {}>", s),
@@ -211,6 +217,13 @@ impl ObjectRef {
         let obj_version = state.store.deref(self).version;
         let iterator = Object::new_instance(None, state.primitive_objects.iterator_type.clone(), ObjectContent::RandomAccessIterator(self.clone(), 0, obj_version));
         state.store.allocate(iterator)
+    }
+
+    pub fn setattr(&self, store: &mut ObjectStore, name: String, value: ObjectRef) {
+        match store.deref(self).attributes {
+            Some(ref attributes) => attributes.borrow_mut().insert(name, value),
+            None => panic!("{}'s attributes are not settable.", self.repr(store)),
+        };
     }
 }
 
@@ -310,14 +323,16 @@ impl PrimitiveObjects {
             name: Some("object".to_string()),
             content: ObjectContent::OtherObject,
             bases: Some(vec![]),
-            class: type_ref.clone()
+            class: type_ref.clone(),
+            attributes: None,
         };
         let type_ = Object {
             version: Object::new_version(),
             name: Some("type".to_string()),
             content: ObjectContent::OtherObject,
             bases: Some(vec![obj_ref.clone()]),
-            class: type_ref.clone()
+            class: type_ref.clone(),
+            attributes: None,
         };
         store.allocate_at(obj_ref.clone(), obj);
         store.allocate_at(type_ref.clone(), type_);

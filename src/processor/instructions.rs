@@ -1,3 +1,5 @@
+use super::super::objects::ObjectRef;
+
 #[derive(PartialEq)]
 #[derive(Debug)]
 #[derive(Clone)]
@@ -38,6 +40,8 @@ impl CmpOperator {
 #[derive(Debug)]
 #[derive(Clone)]
 pub enum Instruction {
+    PushImmediate(ObjectRef),
+
     PopTop,
     DupTop,
     Nop,
@@ -50,6 +54,8 @@ pub enum Instruction {
     PopExcept,
     StoreName(usize),
     ForIter(usize),
+    StoreAttr(usize),
+    StoreGlobal(usize),
     LoadConst(usize),
     LoadName(usize),
     BuildTuple(usize),
@@ -130,6 +136,8 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
                 89 => Instruction::PopExcept,
                 90 => Instruction::StoreName(self.read_argument() as usize),
                 93 => Instruction::ForIter(self.read_argument() as usize),
+                95 => Instruction::StoreAttr(self.read_argument() as usize),
+                97 => Instruction::StoreGlobal(self.read_argument() as usize),
                 100 => Instruction::LoadConst(self.read_argument() as usize),
                 101 => Instruction::LoadName(self.read_argument() as usize),
                 102 => Instruction::BuildTuple(self.read_argument() as usize),

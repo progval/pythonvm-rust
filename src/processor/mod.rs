@@ -123,7 +123,11 @@ fn load_attr<EP: EnvProxy>(state: &mut State<EP>, obj: &Object, name: &String) -
                 }
             }
             else {
-                panic!(format!("Not implemented: looking up attribute '{}' of {:?}", name, obj))
+                // TODO: special names
+                match obj.attributes {
+                    Some(ref attributes) => attributes.borrow().get(name).map(|r| r.clone()),
+                    None => None,
+                }
             }
         }
     }
@@ -133,12 +137,7 @@ fn load_attr<EP: EnvProxy>(state: &mut State<EP>, obj: &Object, name: &String) -
 fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, func_ref: &ObjectRef, mut args: Vec<ObjectRef>, kwargs: Vec<(ObjectRef, ObjectRef)>) {
     // TODO: clone only if necessary
     match state.store.deref(func_ref).content.clone() {
-        ObjectContent::Class(None) => {
-            let frame = call_stack.last_mut().unwrap();
-            frame.var_stack.push(state.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject)))
-        },
-        ObjectContent::Class(Some(ref code_ref)) => {
-            // TODO: run code
+        ObjectContent::Class => {
             let frame = call_stack.last_mut().unwrap();
             frame.var_stack.push(state.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject)))
         },
@@ -236,7 +235,8 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             let frame = call_stack.last_mut().unwrap();
             let instruction = py_unwrap!(state, frame.instructions.get(frame.program_counter), ProcessorError::InvalidProgramCounter);
             // Useful for debugging:
-            /*println!("");
+            /*
+            println!("");
             for r in frame.var_stack.iter() {
                 println!("{}", r.repr(&state.store));
             }
@@ -246,6 +246,10 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             instruction.clone()
         };
         match instruction {
+            Instruction::PushImmediate(r) => {
+                let frame = call_stack.last_mut().unwrap();
+                frame.var_stack.push(r);
+            },
             Instruction::PopTop => {
                 let frame = call_stack.last_mut().unwrap();
                 pop_stack!(state, frame.var_stack);
@@ -368,6 +372,20 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 let iter_func = state.store.allocate(Object::new_instance(None, state.primitive_objects.function_type.clone(), ObjectContent::PrimitiveFunction("iter".to_string())));
                 call_function(state, call_stack, &iter_func, vec![iterator], vec![]);
             }
+            Instruction::StoreAttr(i) => {
+                let frame = call_stack.last_mut().unwrap();
+                let name = py_unwrap!(state, frame.code.names.get(i), ProcessorError::InvalidNameIndex).clone();
+                let owner = pop_stack!(state, frame.var_stack);
+                let value = pop_stack!(state, frame.var_stack);
+                owner.setattr(&mut state.store, name, value);
+                println!("{:?}", state.store.deref(&owner).attributes)
+            }
+            Instruction::StoreGlobal(i) => {
+                let frame = call_stack.last_mut().unwrap();
+                let name = py_unwrap!(state, frame.code.varnames.get(i), ProcessorError::InvalidVarnameIndex).clone();
+                let mut globals = state.modules.get(&frame.object.module(&state.store)).unwrap().borrow_mut();
+                globals.insert(name, pop_stack!(state, frame.var_stack));
+            }
             Instruction::LoadConst(i) => {
                 let frame = call_stack.last_mut().unwrap();
                 frame.var_stack.push(py_unwrap!(state, frame.code.consts.get(i), ProcessorError::InvalidConstIndex).clone())
@@ -408,7 +426,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 match res {
                     None => {
                         let exc = state.primitive_objects.nameerror.clone();
-                        raise(state, call_stack, exc, format!("Unknown variable {}", name))
+                        raise(state, call_stack, exc, format!("Unknown attribute {}", name))
                     },
                     Some(obj_ref) => {
                         let frame = call_stack.last_mut().unwrap();
