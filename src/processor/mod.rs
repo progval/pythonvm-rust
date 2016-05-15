@@ -139,7 +139,7 @@ fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame
     match state.store.deref(func_ref).content.clone() {
         ObjectContent::Class => {
             let frame = call_stack.last_mut().unwrap();
-            frame.var_stack.push(state.store.allocate(Object::new_instance(None, func_ref.clone(), ObjectContent::OtherObject)))
+            frame.var_stack.push(func_ref.new_instance(&mut state.store, args, kwargs))
         },
         ObjectContent::Function(ref func_module, ref code_ref, ref defaults) => {
             let code = state.store.deref(code_ref).content.clone();
@@ -378,7 +378,6 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 let owner = pop_stack!(state, frame.var_stack);
                 let value = pop_stack!(state, frame.var_stack);
                 owner.setattr(&mut state.store, name, value);
-                println!("{:?}", state.store.deref(&owner).attributes)
             }
             Instruction::StoreGlobal(i) => {
                 let frame = call_stack.last_mut().unwrap();

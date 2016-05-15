@@ -225,6 +225,17 @@ impl ObjectRef {
             None => panic!("{}'s attributes are not settable.", self.repr(store)),
         };
     }
+
+    /// __new__
+    pub fn new_instance(&self, store: &mut ObjectStore, args: Vec<ObjectRef>, kwargs: Vec<(ObjectRef, ObjectRef)>) -> ObjectRef {
+        let mut obj = Object::new_instance(None, self.clone(), ObjectContent::OtherObject);
+        if let Some(ref attributes) = store.deref(self).attributes {
+            obj.attributes = Some(Rc::new(RefCell::new(attributes.borrow().clone())))
+        }
+        let obj_ref = store.allocate(obj);
+        // TODO: call its __init__
+        obj_ref
+    }
 }
 
 
