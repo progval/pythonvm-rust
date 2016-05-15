@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
-use super::super::varstack::{VarStack, VectorVarStack};
-use super::super::objects::{ObjectRef, ObjectStore, ObjectContent, Code};
+use super::super::varstack::VectorVarStack;
+use super::super::objects::{ObjectRef, Code};
 use super::instructions::{Instruction, InstructionDecoder};
 
 #[derive(Debug)]

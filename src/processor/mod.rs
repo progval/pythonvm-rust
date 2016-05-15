@@ -1,8 +1,8 @@
 pub mod instructions;
 pub mod frame;
 
-use super::objects::{Code, ObjectStore, ObjectRef, ObjectContent, PrimitiveObjects, Object};
-use super::varstack::{VarStack, VectorVarStack};
+use super::objects::{ObjectRef, ObjectContent, Object};
+use super::varstack::VarStack;
 use self::instructions::{CmpOperator, Instruction};
 use self::frame::{Block, Frame};
 use std::fmt;
@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::iter::FromIterator;
 use super::marshal;
 use super::state::{State, PyResult, unwind, raise, return_value};
 use super::sandbox::EnvProxy;
@@ -141,11 +140,11 @@ fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame
             let frame = call_stack.last_mut().unwrap();
             frame.var_stack.push(func_ref.new_instance(&mut state.store, args, kwargs))
         },
-        ObjectContent::Function(ref func_module, ref code_ref, ref defaults) => {
+        ObjectContent::Function(ref _func_module, ref code_ref, ref defaults) => {
             let code = state.store.deref(code_ref).content.clone();
             if let ObjectContent::Code(code) = code {
 
-                let mut locals = Rc::new(RefCell::new(defaults.clone()));
+                let mut locals = defaults.clone();
 
                 if let Some(starargs_name) = code.get_varargs_name() { // If it has a *args argument
                     if code.argcount > args.len() {
@@ -155,7 +154,7 @@ fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame
                     let obj_ref = state.store.allocate(state.primitive_objects.new_tuple(to_vararg));
 
                     // Bind *args
-                    assert_eq!(None, locals.borrow_mut().insert(starargs_name.clone(), obj_ref));
+                    assert_eq!(None, locals.insert(starargs_name.clone(), obj_ref));
                 }
                 else if code.argcount != args.len() { // If it has no *args argument
                     panic!(format!("{}() takes {} arguments, but {} was/were given.", code.name, code.argcount, args.len()))
@@ -165,7 +164,6 @@ fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame
                 let mut remaining_kwargs = vec![]; // arguments that will go to **kwargs
                 {
                     let explicit_keywords = code.keywords();
-                    let mut locals = locals.borrow_mut();
                     for (key, value) in kwargs.into_iter() {
                         let key_str = match state.store.deref(&key).content {
                             ObjectContent::String(ref s) => s,
@@ -182,7 +180,7 @@ fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame
 
                 if let Some(starkwargs_name) = code.get_varkwargs_name() { // If it has a **kwargs argument
                     let obj_ref = state.store.allocate(state.primitive_objects.new_dict(remaining_kwargs));
-                    locals.borrow_mut().insert(starkwargs_name.clone(), obj_ref);
+                    locals.insert(starkwargs_name.clone(), obj_ref);
                 }
                 else { // If it has no **kwargs argument
                     if remaining_kwargs.len() != 0 {
@@ -192,13 +190,12 @@ fn call_function<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame
 
                 // Bind positional arguments
                 {
-                    let mut locals = locals.borrow_mut();
                     for (argname, argvalue) in code.varnames.iter().zip(args) {
                         locals.insert(argname.clone(), argvalue);
                     };
                 }
 
-                let new_frame = Frame::new(func_ref.clone(), *code, locals);
+                let new_frame = Frame::new(func_ref.clone(), *code, Rc::new(RefCell::new(locals)));
                 call_stack.push(new_frame);
             }
             else {
@@ -350,9 +347,9 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             Instruction::PopExcept => {
                 let frame = call_stack.last_mut().unwrap();
                 let mut three_last = frame.var_stack.pop_all_and_get_n_last(3).unwrap(); // TODO: check
-                let exc_type = three_last.pop();
-                let exc_value = three_last.pop();
-                let exc_traceback = three_last.pop();
+                let _exc_type = three_last.pop();
+                let _exc_value = three_last.pop();
+                let _exc_traceback = three_last.pop();
                 // TODO: do something with exc_*
                 pop_stack!(state, frame.block_stack);
             },
@@ -409,7 +406,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             }
             Instruction::BuildTuple(size) => {
                 let frame = call_stack.last_mut().unwrap();
-                let mut content = py_unwrap!(state, frame.var_stack.pop_many(size), ProcessorError::StackTooSmall);
+                let content = py_unwrap!(state, frame.var_stack.pop_many(size), ProcessorError::StackTooSmall);
                 let tuple = state.primitive_objects.new_tuple(content);
                 frame.var_stack.push(state.store.allocate(tuple));
             }
@@ -515,9 +512,9 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             Instruction::CallFunction(nb_args, nb_kwargs) => {
                 // See “Call constructs” at:
                 // http://security.coverity.com/blog/2014/Nov/understanding-python-bytecode.html
-                let mut kwargs;
-                let mut args;
-                let mut func;
+                let kwargs;
+                let args;
+                let func;
                 {
                     let frame = call_stack.last_mut().unwrap();
                     kwargs = py_unwrap!(state, frame.var_stack.pop_n_pairs(nb_kwargs), ProcessorError::StackTooSmall);
@@ -571,13 +568,13 @@ fn call_module_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Fr
     };
     let module_obj = state.store.allocate(state.primitive_objects.new_module(module_name.clone(), code_ref));
     state.modules.insert(module_name.clone(), Rc::new(RefCell::new(HashMap::new())));
-    let mut call_stack = vec![Frame::new(module_obj, *code, state.modules.get(&module_name).unwrap().clone())];
-    let res = run_code(state, &mut call_stack);
+    call_stack.push(Frame::new(module_obj, *code, state.modules.get(&module_name).unwrap().clone()));
+    let res = run_code(state, call_stack);
     res // Do not raise exceptions before the pop()
 }
 
 /// Get the code of a module from its name
-pub fn get_module_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, module_name: String) -> PyResult {
+pub fn get_module_code<EP: EnvProxy>(state: &mut State<EP>, module_name: String) -> PyResult {
     // Load the code
     let mut module_bytecode = state.envproxy.open_module(module_name.clone());
     let mut buf = [0; 12];
@@ -587,20 +584,14 @@ pub fn get_module_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec
     }
     match marshal::read_object(&mut module_bytecode, &mut state.store, &state.primitive_objects) {
         Err(e) => state.raise_processor_error(ProcessorError::UnmarshalError(e)),
-        Ok(module_code_ref) => {
-            let module_code = match state.store.deref(&module_code_ref).content {
-                ObjectContent::Code(ref code) => code.clone(),
-                ref o => return state.raise_processor_error(ProcessorError::NotACodeObject(format!("module code {:?}", o))),
-            };
-            PyResult::Return(state.store.allocate(state.primitive_objects.new_module(module_name.clone(), module_code_ref)))
-        }
+        Ok(module_code_ref) => PyResult::Return(state.store.allocate(state.primitive_objects.new_module(module_name.clone(), module_code_ref))),
     }
 }
 
 /// Entry point to run code. Loads builtins in the code's namespace and then run it.
 pub fn call_main_code<EP: EnvProxy>(state: &mut State<EP>, code_ref: ObjectRef) -> PyResult {
     let mut call_stack = Vec::new();
-    let builtins_code_ref = py_try!(get_module_code(state, &mut call_stack, "builtins".to_string()));
+    let builtins_code_ref = py_try!(get_module_code(state, "builtins".to_string()));
     py_try!(call_module_code(state, &mut call_stack, "builtins".to_string(), builtins_code_ref));
 
     let mut call_stack = Vec::new();

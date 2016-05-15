@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use super::sandbox::EnvProxy;
-use super::objects::{Code, ObjectStore, ObjectRef, ObjectContent, PrimitiveObjects, Object};
+use super::objects::{ObjectStore, ObjectRef, ObjectContent, PrimitiveObjects, Object};
 use super::processor::ProcessorError;
 use super::processor::frame::{Block, Frame};
 use super::primitives;
@@ -42,7 +42,7 @@ pub fn unwind<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, 
                 // Unwind block stack
                 while let Some(block) = frame.block_stack.pop() {
                     match block {
-                        Block::Loop(begin, end) => { // Non-try…except block, exit it.
+                        Block::Loop(_begin, _end) => { // Non-try…except block, exit it.
                         }
                         Block::TryExcept(begin, end) => {
                             // Found a try…except block

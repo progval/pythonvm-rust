@@ -2,7 +2,6 @@ extern crate itertools;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
-use std::borrow::Cow;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::fmt;
@@ -196,7 +195,7 @@ impl ObjectRef {
                 }
             },
             ObjectContent::RandomAccessIterator(ref container, ref index, ref version) => {
-                format!("<iterator on {} at index {}>", store.deref(container).class.repr(store), version)
+                format!("<iterator on {} at index {} and version {}>", store.deref(container).class.repr(store), index, version)
             }
             ObjectContent::OtherObject => format!("<{} instance>", obj.class.repr(store)),
         }

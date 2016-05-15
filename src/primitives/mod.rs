@@ -5,11 +5,11 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::iter::IntoIterator;
 use super::sandbox::EnvProxy;
-use super::state::{State, PyResult, PyFunction, raise, return_value};
+use super::state::{State, PyFunction, raise, return_value};
 use super::objects::{ObjectRef, ObjectContent, Object, ObjectStore};
 use super::processor::frame::Frame;
 use super::processor::instructions::{Instruction, InstructionDecoder};
-use super::varstack::{VarStack, VectorVarStack};
+use super::varstack::VectorVarStack;
 
 macro_rules! parse_first_arguments {
     ( $funcname:expr, $store:expr, $args:ident, $args_iter:ident, $( $argname:tt $argexpected:tt : { $($argpattern:pat => $argcode:block,)* } ),* ) => {{
@@ -83,7 +83,7 @@ fn build_class<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>,
     };
 
 
-    let mut attributes = Rc::new(RefCell::new(HashMap::new()));
+    let attributes = Rc::new(RefCell::new(HashMap::new()));
     let cls_ref = state.store.allocate(Object::new_class(name, Some(attributes.clone()), state.primitive_objects.type_.clone(), bases));
 
     let mut instructions: Vec<Instruction> = InstructionDecoder::new(code.code.iter()).collect();
@@ -94,7 +94,7 @@ fn build_class<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>,
     instructions.push(Instruction::PushImmediate(cls_ref.clone()));
     instructions.push(Instruction::ReturnValue);
 
-    let mut frame = Frame {
+    let frame = Frame {
         object: cls_ref,
         var_stack: VectorVarStack::new(),
         block_stack: vec![],
@@ -164,7 +164,7 @@ fn isinstance<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, 
     }
 }
 
-fn iter<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, mut args: Vec<ObjectRef>) {
+fn iter<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, args: Vec<ObjectRef>) {
     if args.len() != 1 {
         panic!(format!("__primitives__.iter takes 1 arguments, not {}", args.len()))
     }
@@ -179,7 +179,7 @@ fn iter<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, mut ar
                 };
                 match container.content {
                     ObjectContent::List(ref v) | ObjectContent::Tuple(ref v) => v.get(index).map(|r| r.clone()),
-                    ref c => panic!(format!("RandomAccessIterator does not support {}", container_ref.repr(&state.store)))
+                    _ => panic!(format!("RandomAccessIterator does not support {}", container_ref.repr(&state.store)))
                 }
             };
             match value {
@@ -195,7 +195,7 @@ fn iter<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>, mut ar
                 }
             }
         }
-        ref c =>  {
+        _ =>  {
             let repr = iterator_ref.repr(&state.store);
             let exc = Object::new_instance(None, state.primitive_objects.typeerror.clone(), ObjectContent::OtherObject);
             let exc = state.store.allocate(exc);
