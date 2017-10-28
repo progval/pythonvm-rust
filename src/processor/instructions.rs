@@ -18,7 +18,7 @@ pub enum CmpOperator {
 }
 
 impl CmpOperator {
-    pub fn from_bytecode(n: u8) -> Self {
+    pub fn from_bytecode(n: usize) -> Self {
         match n {
             0 => CmpOperator::Lt,
             1 => CmpOperator::Leq,
@@ -70,7 +70,7 @@ pub enum Instruction {
     StoreFast(usize),
     LoadGlobal(usize),
     CallFunction(usize, usize), // nb_args, nb_kwargs
-    RaiseVarargs(u16),
+    RaiseVarargs(usize),
     MakeFunction { has_defaults: bool, has_kwdefaults: bool, has_annotations: bool, has_closure: bool },
     BuildConstKeyMap(usize),
 }
@@ -124,11 +124,15 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
             self.pending_nops -= 1;
             return Some(Instruction::Nop)
         };
-        let opcode = self.bytestream.next();
-        let oparg = self.bytestream.next();
-        if let (Some(opcode), Some(oparg)) = (opcode, oparg) {
-            let opcode = *opcode;
-            let oparg = *oparg;
+        let mut opcode = 144;
+        let mut oparg: usize = 0;
+        while opcode == 144 {
+            match self.bytestream.next() {
+                Some(op) => { opcode = *op },
+                None => return None,
+            }
+            oparg = (oparg << 8) | (*self.bytestream.next().unwrap() as usize);
+        }
             let inst = match opcode {
                 1 => Instruction::PopTop,
                 4 => Instruction::DupTop,
@@ -139,40 +143,36 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
                 87 => Instruction::PopBlock,
                 88 => Instruction::EndFinally,
                 89 => Instruction::PopExcept,
-                90 => Instruction::StoreName(oparg as usize),
-                93 => Instruction::ForIter(oparg as usize),
-                95 => Instruction::StoreAttr(oparg as usize),
-                97 => Instruction::StoreGlobal(oparg as usize),
-                100 => Instruction::LoadConst(oparg as usize),
-                101 => Instruction::LoadName(oparg as usize),
-                102 => Instruction::BuildTuple(oparg as usize),
-                106 => Instruction::LoadAttr(oparg as usize),
+                90 => Instruction::StoreName(oparg),
+                93 => Instruction::ForIter(oparg),
+                95 => Instruction::StoreAttr(oparg),
+                97 => Instruction::StoreGlobal(oparg),
+                100 => Instruction::LoadConst(oparg),
+                101 => Instruction::LoadName(oparg),
+                102 => Instruction::BuildTuple(oparg),
+                106 => Instruction::LoadAttr(oparg),
                 107 => Instruction::CompareOp(CmpOperator::from_bytecode(oparg)),
-                110 => Instruction::JumpForward(oparg as usize),
-                113 => Instruction::JumpAbsolute(oparg as usize),
-                114 => Instruction::PopJumpIfFalse(oparg as usize),
-                116 => Instruction::LoadGlobal(oparg as usize),
-                120 => Instruction::SetupLoop(oparg as usize + 1),
-                121 => Instruction::SetupExcept(oparg as usize + 1),
-                124 => Instruction::LoadFast(oparg as usize),
-                125 => Instruction::StoreFast(oparg as usize),
-                130 => Instruction::RaiseVarargs(self.read_argument() as u16),
-                131 => Instruction::CallFunction(oparg as usize, 0),
+                110 => Instruction::JumpForward(oparg),
+                113 => Instruction::JumpAbsolute(oparg),
+                114 => Instruction::PopJumpIfFalse(oparg),
+                116 => Instruction::LoadGlobal(oparg),
+                120 => Instruction::SetupLoop(oparg + 1),
+                121 => Instruction::SetupExcept(oparg + 1),
+                124 => Instruction::LoadFast(oparg),
+                125 => Instruction::StoreFast(oparg),
+                130 => Instruction::RaiseVarargs(oparg),
+                131 => Instruction::CallFunction(oparg, 0),
                 132 => Instruction::MakeFunction {
                     has_defaults: oparg & 0x01 != 0,
                     has_kwdefaults: oparg & 0x02 != 0,
                     has_annotations: oparg & 0x04 != 0,
                     has_closure: oparg & 0x08 != 0,
                 },
-                156 => Instruction::BuildConstKeyMap(oparg as usize),
+                156 => Instruction::BuildConstKeyMap(oparg),
                 144 => { self.arg_prefix = Some(self.read_argument()); Instruction::Nop },
                 _ => panic!(format!("Opcode not supported: {:?}", (opcode, oparg))),
             };
             Some(inst)
-        }
-        else {
-            None
-        }
     }
 }
 

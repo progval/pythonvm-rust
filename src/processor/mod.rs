@@ -490,7 +490,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 let obj = state.store.deref(&pop_stack!(state, frame.var_stack));
                 match obj.content {
                     ObjectContent::True => (),
-                    ObjectContent::False => frame.program_counter = target,
+                    ObjectContent::False => frame.program_counter = target / WORD_SIZE,
                     _ => unimplemented!(),
                 }
             }
