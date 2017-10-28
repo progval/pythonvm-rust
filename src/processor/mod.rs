@@ -523,7 +523,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 }
                 call_function(state, call_stack, &func, args, kwargs)
             },
-            Instruction::MakeFunction(false, has_kwdefaults, false, false) => {
+            Instruction::MakeFunction { has_defaults: false, has_kwdefaults, has_annotations: false, has_closure: false } => {
                 // TODO: consume default arguments and annotations
                 let obj = {
                     let frame = call_stack.last_mut().unwrap();
