@@ -134,6 +134,7 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
             oparg = (oparg << 8) | (*self.bytestream.next().unwrap() as usize);
             self.pending_nops += 1;
         }
+        self.pending_nops -= 1;
             let inst = match opcode {
                 1 => Instruction::PopTop,
                 4 => Instruction::DupTop,
