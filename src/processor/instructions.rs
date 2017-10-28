@@ -18,7 +18,7 @@ pub enum CmpOperator {
 }
 
 impl CmpOperator {
-    pub fn from_bytecode(n: u32) -> Self {
+    pub fn from_bytecode(n: u8) -> Self {
         match n {
             0 => CmpOperator::Lt,
             1 => CmpOperator::Leq,
@@ -71,7 +71,8 @@ pub enum Instruction {
     LoadGlobal(usize),
     CallFunction(usize, usize), // nb_args, nb_kwargs
     RaiseVarargs(u16),
-    MakeFunction(usize, usize, usize), // nb_default_args, nb_default_kwargs, nb_annot
+    MakeFunction(bool, bool, bool, bool), // has_defaults, has_kwdefaults, has_annotations, has_closure
+    BuildConstKeyMap(usize),
 }
 
 #[derive(Debug)]
@@ -123,8 +124,12 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
             self.pending_nops -= 1;
             return Some(Instruction::Nop)
         };
-        self.bytestream.next().map(|opcode| {
-            match *opcode {
+        let opcode = self.bytestream.next();
+        let oparg = self.bytestream.next();
+        if let (Some(opcode), Some(oparg)) = (opcode, oparg) {
+            let opcode = *opcode;
+            let oparg = *oparg;
+            let inst = match opcode {
                 1 => Instruction::PopTop,
                 4 => Instruction::DupTop,
                 25 => Instruction::BinarySubscr,
@@ -134,37 +139,35 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
                 87 => Instruction::PopBlock,
                 88 => Instruction::EndFinally,
                 89 => Instruction::PopExcept,
-                90 => Instruction::StoreName(self.read_argument() as usize),
-                93 => Instruction::ForIter(self.read_argument() as usize),
-                95 => Instruction::StoreAttr(self.read_argument() as usize),
-                97 => Instruction::StoreGlobal(self.read_argument() as usize),
-                100 => Instruction::LoadConst(self.read_argument() as usize),
-                101 => Instruction::LoadName(self.read_argument() as usize),
-                102 => Instruction::BuildTuple(self.read_argument() as usize),
-                106 => Instruction::LoadAttr(self.read_argument() as usize),
-                107 => Instruction::CompareOp(CmpOperator::from_bytecode(self.read_argument())),
-                110 => Instruction::JumpForward(self.read_argument() as usize + 2), // +2, because JumpForward takes 3 bytes, and the relative address is computed from the next instruction.
-                113 => Instruction::JumpAbsolute(self.read_argument() as usize),
-                114 => Instruction::PopJumpIfFalse(self.read_argument() as usize),
-                116 => Instruction::LoadGlobal(self.read_argument() as usize),
-                120 => Instruction::SetupLoop(self.read_argument() as usize + 2),
-                121 => Instruction::SetupExcept(self.read_argument() as usize + 2),
-                124 => Instruction::LoadFast(self.read_argument() as usize),
-                125 => Instruction::StoreFast(self.read_argument() as usize),
+                90 => Instruction::StoreName(oparg as usize),
+                93 => Instruction::ForIter(oparg as usize),
+                95 => Instruction::StoreAttr(oparg as usize),
+                97 => Instruction::StoreGlobal(oparg as usize),
+                100 => Instruction::LoadConst(oparg as usize),
+                101 => Instruction::LoadName(oparg as usize),
+                102 => Instruction::BuildTuple(oparg as usize),
+                106 => Instruction::LoadAttr(oparg as usize),
+                107 => Instruction::CompareOp(CmpOperator::from_bytecode(oparg)),
+                110 => Instruction::JumpForward(oparg as usize),
+                113 => Instruction::JumpAbsolute(oparg as usize),
+                114 => Instruction::PopJumpIfFalse(oparg as usize),
+                116 => Instruction::LoadGlobal(oparg as usize),
+                120 => Instruction::SetupLoop(oparg as usize + 1),
+                121 => Instruction::SetupExcept(oparg as usize + 1),
+                124 => Instruction::LoadFast(oparg as usize),
+                125 => Instruction::StoreFast(oparg as usize),
                 130 => Instruction::RaiseVarargs(self.read_argument() as u16),
-                131 => Instruction::CallFunction(self.read_byte() as usize, self.read_byte() as usize),
-                132 => {
-                    let arg = self.read_argument();
-                    let nb_pos = arg & 0xFF;
-                    let nb_kw = (arg >> 8) & 0xFF;
-                    //let nb_annot = (arg >> 16) & 0x7FF; // TODO
-                    let nb_annot = 0;
-                    Instruction::MakeFunction(nb_pos as usize, nb_kw as usize, nb_annot as usize)
-                },
+                131 => Instruction::CallFunction(oparg as usize, 0),
+                132 => Instruction::MakeFunction(oparg & 0x01 != 0, oparg & 0x02 != 0, oparg & 0x04 != 0, oparg & 0x08 != 0),
+                156 => Instruction::BuildConstKeyMap(oparg as usize),
                 144 => { self.arg_prefix = Some(self.read_argument()); Instruction::Nop },
-                _ => panic!(format!("Opcode not supported: {}", opcode)),
-            }
-        })
+                _ => panic!(format!("Opcode not supported: {:?}", (opcode, oparg))),
+            };
+            Some(inst)
+        }
+        else {
+            None
+        }
     }
 }
 

@@ -9,6 +9,7 @@ pub trait VarStack : Debug {
     fn push(&mut self, value: Self::Item);
     fn pop_all_and_get_n_last(&mut self, nb: usize) -> Option<Vec<Self::Item>>;
     fn pop_n_pairs(&mut self, nb: usize) -> Option<Vec<(Self::Item, Self::Item)>>;
+    fn peek(&self, nb: usize) -> Option<Vec<&Self::Item>>;
 }
 
 #[derive(Debug)]
@@ -74,5 +75,14 @@ impl<Item: Clone> VarStack for VectorVarStack<Item> where Item: Debug {
             }
             pairs
         })
+    }
+    fn peek(&self, nb: usize) -> Option<Vec<&Self::Item>> {
+        if nb > self.vector.len() {
+            None
+        }
+        else {
+            let length = self.vector.len();
+            Some(self.vector[(length-nb)..length].iter().collect())
+        }
     }
 }

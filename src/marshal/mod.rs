@@ -18,6 +18,6 @@ pub fn check_magic(buf: &[u8]) -> bool {
         false
     }
     else {
-        3310 <= version /* ≥ 3.4rc2 */ && version < 3390 /* < 3.7 */
+        3379 <= version /* ≥ 3.6rc1 */ && version < 3390 /* < 3.7 */
     }
 }

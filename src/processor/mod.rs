@@ -523,7 +523,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 }
                 call_function(state, call_stack, &func, args, kwargs)
             },
-            Instruction::MakeFunction(0, nb_default_kwargs, 0) => {
+            Instruction::MakeFunction(false, has_kwdefaults, false, false) => {
                 // TODO: consume default arguments and annotations
                 let obj = {
                     let frame = call_stack.last_mut().unwrap();
@@ -540,18 +540,35 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 };
                 let frame = call_stack.last_mut().unwrap();
                 let code = pop_stack!(state, frame.var_stack);
-                let raw_kwdefaults = py_unwrap!(state, frame.var_stack.pop_n_pairs(nb_default_kwargs), ProcessorError::StackTooSmall);
                 let mut kwdefaults: HashMap<String, ObjectRef> = HashMap::new();
-                kwdefaults.reserve(nb_default_kwargs);
-                for (key, value) in raw_kwdefaults {
-                    match state.store.deref(&key).content {
-                        ObjectContent::String(ref s) => { kwdefaults.insert(s.clone(), value); },
-                        _ => panic!("Defaults' keys must be strings."),
+                if has_kwdefaults {
+                    let obj = state.store.deref(&pop_stack!(state, frame.var_stack)).content.clone(); // TODO: clone only if necessary
+                    let raw_kwdefaults = match obj {
+                        ObjectContent::Dict(ref d) => d,
+                        _ => panic!("bad type for default kwd"),
+                    };
+                    kwdefaults.reserve(raw_kwdefaults.len());
+                    for &(ref key, ref value) in raw_kwdefaults {
+                        match state.store.deref(&key).content {
+                            ObjectContent::String(ref s) => { kwdefaults.insert(s.clone(), value.clone()); },
+                            _ => panic!("Defaults' keys must be strings."),
+                        }
                     }
                 }
                 let func = state.primitive_objects.new_function(func_name, frame.object.module(&state.store), code, kwdefaults);
                 frame.var_stack.push(state.store.allocate(func))
             },
+            Instruction::BuildConstKeyMap(size) => {
+                let frame = call_stack.last_mut().unwrap();
+                let obj = state.store.deref(&pop_stack!(state, frame.var_stack)).content.clone(); // TODO: clone only if necessary
+                let keys: Vec<ObjectRef> = match obj {
+                    ObjectContent::Tuple(ref v) => v.clone(),
+                    _ => panic!("bad BuildConstKeyMap keys argument."),
+                };
+                let values: Vec<ObjectRef> = frame.var_stack.peek(size).unwrap().iter().map(|r| (*r).clone()).collect();
+                let dict = state.primitive_objects.new_dict(keys.into_iter().zip(values).collect());
+                frame.var_stack.push(state.store.allocate(dict))
+            }
             _ => panic!(format!("todo: instruction {:?}", instruction)),
         }
     };
