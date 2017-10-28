@@ -4,7 +4,7 @@ rust:
   - beta
   - nightly
 before_script:
-  - wget https://github.com/python/cpython/archive/3.5.zip -O cpython.zip
+  - wget https://github.com/python/cpython/archive/3.6.zip -O cpython.zip
   - unzip cpython.zip
   - cd cpython-*
   - ./configure --prefix=$HOME/.local/
