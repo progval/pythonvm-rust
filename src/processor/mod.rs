@@ -15,6 +15,8 @@ use super::state::{State, PyResult, unwind, raise, return_value};
 use super::sandbox::EnvProxy;
 use super::primitives;
 
+const WORD_SIZE: usize = 2;
+
 #[derive(Debug)]
 pub enum ProcessorError {
     CircularReference,
@@ -233,11 +235,12 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             let instruction = py_unwrap!(state, frame.instructions.get(frame.program_counter), ProcessorError::InvalidProgramCounter);
             // Useful for debugging:
             /*
-            println!("");
+            println!("======");
             for r in frame.var_stack.iter() {
                 println!("{}", r.repr(&state.store));
             }
             println!("{} {:?}", frame.program_counter, instruction);
+            println!("======");
             */
             frame.program_counter += 1;
             instruction.clone()
@@ -362,7 +365,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             Instruction::ForIter(i) => {
                 let iterator = {
                     let frame = call_stack.last_mut().unwrap();
-                    frame.block_stack.push(Block::ExceptPopGoto(state.primitive_objects.stopiteration.clone(), 1, frame.program_counter+i));
+                    frame.block_stack.push(Block::ExceptPopGoto(state.primitive_objects.stopiteration.clone(), 1, frame.program_counter+i/WORD_SIZE));
                     let iterator = top_stack!(state, frame.var_stack);
                     iterator.clone()
                 };
@@ -436,7 +439,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             }
             Instruction::SetupExcept(i) => {
                 let frame = call_stack.last_mut().unwrap();
-                frame.block_stack.push(Block::TryExcept(frame.program_counter, frame.program_counter+i))
+                frame.block_stack.push(Block::TryExcept(frame.program_counter, frame.program_counter+i/WORD_SIZE))
             }
             Instruction::CompareOp(CmpOperator::Eq) => {
                 let frame = call_stack.last_mut().unwrap();
@@ -465,11 +468,11 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             }
             Instruction::JumpAbsolute(target) => {
                 let frame = call_stack.last_mut().unwrap();
-                frame.program_counter = target
+                frame.program_counter = target / WORD_SIZE
             }
             Instruction::JumpForward(delta) => {
                 let frame = call_stack.last_mut().unwrap();
-                frame.program_counter += delta
+                frame.program_counter += delta / WORD_SIZE
             }
             Instruction::LoadFast(i) => {
                 let frame = call_stack.last_mut().unwrap();
