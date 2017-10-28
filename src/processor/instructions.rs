@@ -171,7 +171,7 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
                     has_closure: oparg & 0x08 != 0,
                 },
                 156 => Instruction::BuildConstKeyMap(oparg),
-                144 => { self.arg_prefix = Some(self.read_argument()); Instruction::Nop },
+                144 => panic!("The impossible happened."),
                 _ => panic!(format!("Opcode not supported: {:?}", (opcode, oparg))),
             };
             Some(inst)
