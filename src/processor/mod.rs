@@ -239,7 +239,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             for r in frame.var_stack.iter() {
                 println!("{}", r.repr(&state.store));
             }
-            println!("{} {:?}", frame.program_counter, instruction);
+            println!("{} {:?}", frame.program_counter*WORD_SIZE, instruction);
             println!("======");
             */
             frame.program_counter += 1;
@@ -439,7 +439,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             }
             Instruction::SetupExcept(i) => {
                 let frame = call_stack.last_mut().unwrap();
-                frame.block_stack.push(Block::TryExcept(frame.program_counter, frame.program_counter+i))
+                frame.block_stack.push(Block::TryExcept(frame.program_counter, frame.program_counter+i/WORD_SIZE))
             }
             Instruction::CompareOp(CmpOperator::Eq) => {
                 let frame = call_stack.last_mut().unwrap();
