@@ -181,8 +181,8 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
 
 #[test]
 fn test_load_read() {
-    let bytes: Vec<u8> = vec![124, 1, 0, 83];
+    let bytes: Vec<u8> = vec![124, 1, 83, 0];
     let reader = InstructionDecoder::new(bytes.iter());
     let instructions: Vec<Instruction> = reader.collect();
-    assert_eq!(vec![Instruction::LoadFast(1), Instruction::Nop, Instruction::Nop, Instruction::ReturnValue], instructions);
+    assert_eq!(vec![Instruction::LoadFast(1), Instruction::ReturnValue], instructions);
 }
