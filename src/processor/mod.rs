@@ -512,16 +512,27 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 panic!("Bad RaiseVarargs argument") // TODO: Raise an exception instead
             }
 
-            Instruction::CallFunction(nb_args, nb_kwargs) => {
+            Instruction::CallFunction(nb_args, has_kwargs) => {
                 // See “Call constructs” at:
                 // http://security.coverity.com/blog/2014/Nov/understanding-python-bytecode.html
-                let kwargs;
+                let kwargs: Vec<(ObjectRef, ObjectRef)>;
                 let args;
                 let func;
                 {
                     let frame = call_stack.last_mut().unwrap();
-                    kwargs = py_unwrap!(state, frame.var_stack.pop_n_pairs(nb_kwargs), ProcessorError::StackTooSmall);
-                    args = py_unwrap!(state, frame.var_stack.pop_many(nb_args), ProcessorError::StackTooSmall);
+                    if has_kwargs {
+                        let ref obj = state.store.deref(&pop_stack!(state, frame.var_stack)).content;
+                        let names: Vec<ObjectRef> = match obj {
+                            &ObjectContent::Tuple(ref v) => v.into_iter().cloned().collect(),
+                            _ => panic!("Bad CallFunctionKw argument"),
+                        };
+                        let values: Vec<ObjectRef> = frame.var_stack.pop_many(names.len()).unwrap();
+                        kwargs = names.into_iter().zip(values).collect();
+                    }
+                    else {
+                        kwargs = Vec::new();
+                    }
+                    args = py_unwrap!(state, frame.var_stack.pop_many(nb_args - kwargs.len()), ProcessorError::StackTooSmall);
                     func = pop_stack!(state, frame.var_stack);
                 }
                 call_function(state, call_stack, &func, args, kwargs)

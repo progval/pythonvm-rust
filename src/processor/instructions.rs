@@ -69,7 +69,7 @@ pub enum Instruction {
     LoadFast(usize),
     StoreFast(usize),
     LoadGlobal(usize),
-    CallFunction(usize, usize), // nb_args, nb_kwargs
+    CallFunction(usize, bool), // nb_args + nb_kwargs, has_kwargs
     RaiseVarargs(usize),
     MakeFunction { has_defaults: bool, has_kwdefaults: bool, has_annotations: bool, has_closure: bool },
     BuildConstKeyMap(usize),
@@ -163,13 +163,14 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
             124 => Instruction::LoadFast(oparg),
             125 => Instruction::StoreFast(oparg),
             130 => Instruction::RaiseVarargs(oparg),
-            131 => Instruction::CallFunction(oparg, 0),
+            131 => Instruction::CallFunction(oparg, false),
             132 => Instruction::MakeFunction {
                 has_defaults: oparg & 0x01 != 0,
                 has_kwdefaults: oparg & 0x02 != 0,
                 has_annotations: oparg & 0x04 != 0,
                 has_closure: oparg & 0x08 != 0,
             },
+            141 => Instruction::CallFunction(oparg, true),
             156 => Instruction::BuildConstKeyMap(oparg),
             144 => panic!("The impossible happened."),
             _ => panic!(format!("Opcode not supported: {:?}", (opcode, oparg))),
