@@ -23,7 +23,7 @@ A Python virtual machine, written in Rust.
 
 ## Dependencies
 
-* CPython 3.6 (used as a parser and bytecode compiler). Older versions down to 3.4 should work, but their support is not tested.
+* CPython 3.6 (used as a parser and bytecode compiler).
 * [Rust](https://www.rust-lang.org/downloads.html)
 * [Cargo](https://crates.io/install)
 

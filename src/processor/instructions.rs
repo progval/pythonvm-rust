@@ -18,7 +18,7 @@ pub enum CmpOperator {
 }
 
 impl CmpOperator {
-    pub fn from_bytecode(n: u32) -> Self {
+    pub fn from_bytecode(n: usize) -> Self {
         match n {
             0 => CmpOperator::Lt,
             1 => CmpOperator::Leq,
@@ -69,9 +69,10 @@ pub enum Instruction {
     LoadFast(usize),
     StoreFast(usize),
     LoadGlobal(usize),
-    CallFunction(usize, usize), // nb_args, nb_kwargs
-    RaiseVarargs(u16),
-    MakeFunction(usize, usize, usize), // nb_default_args, nb_default_kwargs, nb_annot
+    CallFunction(usize, bool), // nb_args + nb_kwargs, has_kwargs
+    RaiseVarargs(usize),
+    MakeFunction { has_defaults: bool, has_kwdefaults: bool, has_annotations: bool, has_closure: bool },
+    BuildConstKeyMap(usize),
 }
 
 #[derive(Debug)]
@@ -123,55 +124,65 @@ impl<'a, I> Iterator for InstructionDecoder<I> where I: Iterator<Item=&'a u8> {
             self.pending_nops -= 1;
             return Some(Instruction::Nop)
         };
-        self.bytestream.next().map(|opcode| {
-            match *opcode {
-                1 => Instruction::PopTop,
-                4 => Instruction::DupTop,
-                25 => Instruction::BinarySubscr,
-                68 => Instruction::GetIter,
-                71 => Instruction::LoadBuildClass,
-                83 => Instruction::ReturnValue,
-                87 => Instruction::PopBlock,
-                88 => Instruction::EndFinally,
-                89 => Instruction::PopExcept,
-                90 => Instruction::StoreName(self.read_argument() as usize),
-                93 => Instruction::ForIter(self.read_argument() as usize),
-                95 => Instruction::StoreAttr(self.read_argument() as usize),
-                97 => Instruction::StoreGlobal(self.read_argument() as usize),
-                100 => Instruction::LoadConst(self.read_argument() as usize),
-                101 => Instruction::LoadName(self.read_argument() as usize),
-                102 => Instruction::BuildTuple(self.read_argument() as usize),
-                106 => Instruction::LoadAttr(self.read_argument() as usize),
-                107 => Instruction::CompareOp(CmpOperator::from_bytecode(self.read_argument())),
-                110 => Instruction::JumpForward(self.read_argument() as usize + 2), // +2, because JumpForward takes 3 bytes, and the relative address is computed from the next instruction.
-                113 => Instruction::JumpAbsolute(self.read_argument() as usize),
-                114 => Instruction::PopJumpIfFalse(self.read_argument() as usize),
-                116 => Instruction::LoadGlobal(self.read_argument() as usize),
-                120 => Instruction::SetupLoop(self.read_argument() as usize + 2),
-                121 => Instruction::SetupExcept(self.read_argument() as usize + 2),
-                124 => Instruction::LoadFast(self.read_argument() as usize),
-                125 => Instruction::StoreFast(self.read_argument() as usize),
-                130 => Instruction::RaiseVarargs(self.read_argument() as u16),
-                131 => Instruction::CallFunction(self.read_byte() as usize, self.read_byte() as usize),
-                132 => {
-                    let arg = self.read_argument();
-                    let nb_pos = arg & 0xFF;
-                    let nb_kw = (arg >> 8) & 0xFF;
-                    //let nb_annot = (arg >> 16) & 0x7FF; // TODO
-                    let nb_annot = 0;
-                    Instruction::MakeFunction(nb_pos as usize, nb_kw as usize, nb_annot as usize)
-                },
-                144 => { self.arg_prefix = Some(self.read_argument()); Instruction::Nop },
-                _ => panic!(format!("Opcode not supported: {}", opcode)),
+        let mut opcode = 144;
+        let mut oparg: usize = 0;
+        while opcode == 144 {
+            match self.bytestream.next() {
+                Some(op) => { opcode = *op },
+                None => return None,
             }
-        })
+            oparg = (oparg << 8) | (*self.bytestream.next().unwrap() as usize);
+            self.pending_nops += 1;
+        }
+        self.pending_nops -= 1;
+        let inst = match opcode {
+            1 => Instruction::PopTop,
+            4 => Instruction::DupTop,
+            25 => Instruction::BinarySubscr,
+            68 => Instruction::GetIter,
+            71 => Instruction::LoadBuildClass,
+            83 => Instruction::ReturnValue,
+            87 => Instruction::PopBlock,
+            88 => Instruction::EndFinally,
+            89 => Instruction::PopExcept,
+            90 => Instruction::StoreName(oparg),
+            93 => Instruction::ForIter(oparg),
+            95 => Instruction::StoreAttr(oparg),
+            97 => Instruction::StoreGlobal(oparg),
+            100 => Instruction::LoadConst(oparg),
+            101 => Instruction::LoadName(oparg),
+            102 => Instruction::BuildTuple(oparg),
+            106 => Instruction::LoadAttr(oparg),
+            107 => Instruction::CompareOp(CmpOperator::from_bytecode(oparg)),
+            110 => Instruction::JumpForward(oparg),
+            113 => Instruction::JumpAbsolute(oparg),
+            114 => Instruction::PopJumpIfFalse(oparg),
+            116 => Instruction::LoadGlobal(oparg),
+            120 => Instruction::SetupLoop(oparg + 1),
+            121 => Instruction::SetupExcept(oparg + 1),
+            124 => Instruction::LoadFast(oparg),
+            125 => Instruction::StoreFast(oparg),
+            130 => Instruction::RaiseVarargs(oparg),
+            131 => Instruction::CallFunction(oparg, false),
+            132 => Instruction::MakeFunction {
+                has_defaults: oparg & 0x01 != 0,
+                has_kwdefaults: oparg & 0x02 != 0,
+                has_annotations: oparg & 0x04 != 0,
+                has_closure: oparg & 0x08 != 0,
+            },
+            141 => Instruction::CallFunction(oparg, true),
+            156 => Instruction::BuildConstKeyMap(oparg),
+            144 => panic!("The impossible happened."),
+            _ => panic!(format!("Opcode not supported: {:?}", (opcode, oparg))),
+        };
+        Some(inst)
     }
 }
 
 #[test]
 fn test_load_read() {
-    let bytes: Vec<u8> = vec![124, 1, 0, 83];
+    let bytes: Vec<u8> = vec![124, 1, 83, 0];
     let reader = InstructionDecoder::new(bytes.iter());
     let instructions: Vec<Instruction> = reader.collect();
-    assert_eq!(vec![Instruction::LoadFast(1), Instruction::Nop, Instruction::Nop, Instruction::ReturnValue], instructions);
+    assert_eq!(vec![Instruction::LoadFast(1), Instruction::ReturnValue], instructions);
 }

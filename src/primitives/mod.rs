@@ -89,7 +89,9 @@ fn build_class<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>,
     let mut instructions: Vec<Instruction> = InstructionDecoder::new(code.code.iter()).collect();
 
     // Hack to made the class' code return the class instead of None
-    assert_eq!(instructions.pop(), Some(Instruction::ReturnValue));
+    let mut last_instruction;
+    while {last_instruction = instructions.pop(); last_instruction == Some(Instruction::Nop)} {};
+    assert_eq!(last_instruction, Some(Instruction::ReturnValue));
     instructions.pop(); // LoadConst None
     instructions.push(Instruction::PushImmediate(cls_ref.clone()));
     instructions.push(Instruction::ReturnValue);

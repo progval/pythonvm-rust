@@ -15,6 +15,8 @@ use super::state::{State, PyResult, unwind, raise, return_value};
 use super::sandbox::EnvProxy;
 use super::primitives;
 
+const WORD_SIZE: usize = 2;
+
 #[derive(Debug)]
 pub enum ProcessorError {
     CircularReference,
@@ -233,11 +235,12 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             let instruction = py_unwrap!(state, frame.instructions.get(frame.program_counter), ProcessorError::InvalidProgramCounter);
             // Useful for debugging:
             /*
-            println!("");
+            println!("======");
             for r in frame.var_stack.iter() {
                 println!("{}", r.repr(&state.store));
             }
-            println!("{} {:?}", frame.program_counter, instruction);
+            println!("{} {:?}", frame.program_counter*WORD_SIZE, instruction);
+            println!("======");
             */
             frame.program_counter += 1;
             instruction.clone()
@@ -362,7 +365,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             Instruction::ForIter(i) => {
                 let iterator = {
                     let frame = call_stack.last_mut().unwrap();
-                    frame.block_stack.push(Block::ExceptPopGoto(state.primitive_objects.stopiteration.clone(), 1, frame.program_counter+i));
+                    frame.block_stack.push(Block::ExceptPopGoto(state.primitive_objects.stopiteration.clone(), 1, frame.program_counter+i/WORD_SIZE));
                     let iterator = top_stack!(state, frame.var_stack);
                     iterator.clone()
                 };
@@ -436,7 +439,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             }
             Instruction::SetupExcept(i) => {
                 let frame = call_stack.last_mut().unwrap();
-                frame.block_stack.push(Block::TryExcept(frame.program_counter, frame.program_counter+i))
+                frame.block_stack.push(Block::TryExcept(frame.program_counter, frame.program_counter+i/WORD_SIZE))
             }
             Instruction::CompareOp(CmpOperator::Eq) => {
                 let frame = call_stack.last_mut().unwrap();
@@ -465,11 +468,11 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
             }
             Instruction::JumpAbsolute(target) => {
                 let frame = call_stack.last_mut().unwrap();
-                frame.program_counter = target
+                frame.program_counter = target / WORD_SIZE
             }
             Instruction::JumpForward(delta) => {
                 let frame = call_stack.last_mut().unwrap();
-                frame.program_counter += delta
+                frame.program_counter += delta / WORD_SIZE
             }
             Instruction::LoadFast(i) => {
                 let frame = call_stack.last_mut().unwrap();
@@ -487,7 +490,7 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 let obj = state.store.deref(&pop_stack!(state, frame.var_stack));
                 match obj.content {
                     ObjectContent::True => (),
-                    ObjectContent::False => frame.program_counter = target,
+                    ObjectContent::False => frame.program_counter = target / WORD_SIZE,
                     _ => unimplemented!(),
                 }
             }
@@ -509,21 +512,32 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 panic!("Bad RaiseVarargs argument") // TODO: Raise an exception instead
             }
 
-            Instruction::CallFunction(nb_args, nb_kwargs) => {
+            Instruction::CallFunction(nb_args, has_kwargs) => {
                 // See “Call constructs” at:
                 // http://security.coverity.com/blog/2014/Nov/understanding-python-bytecode.html
-                let kwargs;
+                let kwargs: Vec<(ObjectRef, ObjectRef)>;
                 let args;
                 let func;
                 {
                     let frame = call_stack.last_mut().unwrap();
-                    kwargs = py_unwrap!(state, frame.var_stack.pop_n_pairs(nb_kwargs), ProcessorError::StackTooSmall);
-                    args = py_unwrap!(state, frame.var_stack.pop_many(nb_args), ProcessorError::StackTooSmall);
+                    if has_kwargs {
+                        let ref obj = state.store.deref(&pop_stack!(state, frame.var_stack)).content;
+                        let names: Vec<ObjectRef> = match obj {
+                            &ObjectContent::Tuple(ref v) => v.into_iter().cloned().collect(),
+                            _ => panic!("Bad CallFunctionKw argument"),
+                        };
+                        let values: Vec<ObjectRef> = frame.var_stack.pop_many(names.len()).unwrap();
+                        kwargs = names.into_iter().zip(values).collect();
+                    }
+                    else {
+                        kwargs = Vec::new();
+                    }
+                    args = py_unwrap!(state, frame.var_stack.pop_many(nb_args - kwargs.len()), ProcessorError::StackTooSmall);
                     func = pop_stack!(state, frame.var_stack);
                 }
                 call_function(state, call_stack, &func, args, kwargs)
             },
-            Instruction::MakeFunction(0, nb_default_kwargs, 0) => {
+            Instruction::MakeFunction { has_defaults: false, has_kwdefaults, has_annotations: false, has_closure: false } => {
                 // TODO: consume default arguments and annotations
                 let obj = {
                     let frame = call_stack.last_mut().unwrap();
@@ -540,18 +554,35 @@ fn run_code<EP: EnvProxy>(state: &mut State<EP>, call_stack: &mut Vec<Frame>) ->
                 };
                 let frame = call_stack.last_mut().unwrap();
                 let code = pop_stack!(state, frame.var_stack);
-                let raw_kwdefaults = py_unwrap!(state, frame.var_stack.pop_n_pairs(nb_default_kwargs), ProcessorError::StackTooSmall);
                 let mut kwdefaults: HashMap<String, ObjectRef> = HashMap::new();
-                kwdefaults.reserve(nb_default_kwargs);
-                for (key, value) in raw_kwdefaults {
-                    match state.store.deref(&key).content {
-                        ObjectContent::String(ref s) => { kwdefaults.insert(s.clone(), value); },
-                        _ => panic!("Defaults' keys must be strings."),
+                if has_kwdefaults {
+                    let obj = state.store.deref(&pop_stack!(state, frame.var_stack)).content.clone(); // TODO: clone only if necessary
+                    let raw_kwdefaults = match obj {
+                        ObjectContent::Dict(ref d) => d,
+                        _ => panic!("bad type for default kwd"),
+                    };
+                    kwdefaults.reserve(raw_kwdefaults.len());
+                    for &(ref key, ref value) in raw_kwdefaults {
+                        match state.store.deref(&key).content {
+                            ObjectContent::String(ref s) => { kwdefaults.insert(s.clone(), value.clone()); },
+                            _ => panic!("Defaults' keys must be strings."),
+                        }
                     }
                 }
                 let func = state.primitive_objects.new_function(func_name, frame.object.module(&state.store), code, kwdefaults);
                 frame.var_stack.push(state.store.allocate(func))
             },
+            Instruction::BuildConstKeyMap(size) => {
+                let frame = call_stack.last_mut().unwrap();
+                let obj = state.store.deref(&pop_stack!(state, frame.var_stack)).content.clone(); // TODO: clone only if necessary
+                let keys: Vec<ObjectRef> = match obj {
+                    ObjectContent::Tuple(ref v) => v.clone(),
+                    _ => panic!("bad BuildConstKeyMap keys argument."),
+                };
+                let values: Vec<ObjectRef> = frame.var_stack.peek(size).unwrap().iter().map(|r| (*r).clone()).collect();
+                let dict = state.primitive_objects.new_dict(keys.into_iter().zip(values).collect());
+                frame.var_stack.push(state.store.allocate(dict))
+            }
             _ => panic!(format!("todo: instruction {:?}", instruction)),
         }
     };
