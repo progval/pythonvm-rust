@@ -4,6 +4,10 @@
 
 A Python virtual machine, written in Rust.
 
+## Status
+
+This project is inactive. Check out [RustPython](https://github.com/RustPython/RustPython/) instead
+
 ## Features
 
 * prints strings to stdout
@@ -29,7 +33,7 @@ A Python virtual machine, written in Rust.
 
 ## Try it
 
-1. `git clone https://github.com/ProgVal/pythonvm-rust.git`
+1. `git clone https://github.com/progval/pythonvm-rust.git`
 2. `cd pythonvm-rust`
 3. `python3 -m compileall -b pythonlib examples`
 4. `cargo run pythonlib/ examples/helloworld.pyc`
